@@ -1,6 +1,6 @@
 IMAGE ?= credentials-broker:dev
 
-.PHONY: build run test lint format clean docker-build docker-run
+.PHONY: build run test lint format fmt-check clean docker-build docker-run
 
 build:
 	go build -o bin/broker ./cmd/broker
@@ -17,6 +17,10 @@ lint:
 format:
 	gofmt -w .
 	goimports -w .
+
+fmt-check:
+	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+	@test -z "$$(goimports -l .)" || (goimports -l . && exit 1)
 
 clean:
 	rm -rf bin
