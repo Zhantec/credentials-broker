@@ -27,7 +27,7 @@ func TestGetSecret_FetchesCachesAndInjectsToken(t *testing.T) {
 			t.Errorf("client_id = %q, want id", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"access_token": "tok-1", "expires_in": 3600}`))
+		_, _ = w.Write([]byte(`{"access_token": "tok-1", "expires_in": 3600}`))
 	}))
 	defer tokenServer.Close()
 
@@ -58,7 +58,7 @@ func TestGetSecret_RefetchesAfterExpiry(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		// expires_in <= 5 collapses to an already-past expiry (5s early-refresh
 		// margin), forcing a refetch on the very next call.
-		w.Write([]byte(`{"access_token": "tok", "expires_in": 1}`))
+		_, _ = w.Write([]byte(`{"access_token": "tok", "expires_in": 1}`))
 	}))
 	defer tokenServer.Close()
 
@@ -87,6 +87,94 @@ func TestGetSecret_MalformedCredentials(t *testing.T) {
 	c := NewClient(fakeResolver{value: "not json"}, http.DefaultClient)
 	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
 		t.Error("expected error for malformed client credentials")
+	}
+}
+
+func TestGetSecret_WithScope(t *testing.T) {
+	var gotScope string
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotScope = r.FormValue("scope")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token": "tok", "expires_in": 3600}`))
+	}))
+	defer tokenServer.Close()
+
+	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `", "scope": "read:all"}`
+	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
+
+	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err != nil {
+		t.Fatalf("GetSecret: %v", err)
+	}
+	if gotScope != "read:all" {
+		t.Errorf("scope = %q, want %q", gotScope, "read:all")
+	}
+}
+
+func TestGetSecret_MalformedTokenResponse(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer tokenServer.Close()
+
+	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`
+	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
+
+	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+		t.Error("expected error when token response is malformed")
+	}
+}
+
+func TestGetSecret_TokenResponseMissingAccessToken(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"expires_in": 3600}`))
+	}))
+	defer tokenServer.Close()
+
+	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`
+	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
+
+	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+		t.Error("expected error when token response is missing access_token")
+	}
+}
+
+func TestGetSecret_TokenResponseNoExpiry(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token": "tok"}`))
+	}))
+	defer tokenServer.Close()
+
+	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`
+	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
+
+	got, err := c.GetSecret("/prod/gh", "oauth_client")
+	if err != nil {
+		t.Fatalf("GetSecret: %v", err)
+	}
+	if got != "tok" {
+		t.Errorf("token = %q, want %q", got, "tok")
+	}
+}
+
+func TestGetSecret_MissingTokenURL(t *testing.T) {
+	c := NewClient(fakeResolver{value: `{"client_id": "id", "client_secret": "secret"}`}, http.DefaultClient)
+	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+		t.Error("expected error when client credentials are missing token_url")
+	}
+}
+
+func TestGetSecret_TokenEndpointUnreachable(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := tokenServer.URL
+	tokenServer.Close() // closed before use -> connection refused
+
+	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + deadURL + `"}`
+	c := NewClient(fakeResolver{value: creds}, http.DefaultClient)
+
+	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+		t.Error("expected error when token endpoint is unreachable")
 	}
 }
 

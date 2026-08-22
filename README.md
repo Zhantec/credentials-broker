@@ -37,17 +37,29 @@ Every request carries `Authorization: Bearer <caller-api-key>`.
 Unknown key → `401`, key not permitted for the target → `403`, unknown target
 (or one whose mode has no handler) → `404`.
 
+## Development
+
+```sh
+make run     # go run ./cmd/broker against config.example.yaml
+make test    # go test ./...
+make lint    # golangci-lint run
+make format  # gofmt + goimports
+make build   # build a local ./bin/broker binary
+make docker-build  # docker build -t credentials-broker:dev .
+make docker-run    # run the built image, config.example.yaml mounted in
+```
+
+`make run` still needs `INFISICAL_BASE_URL`, `INFISICAL_CLIENT_ID`, and
+`INFISICAL_CLIENT_SECRET` set in the environment.
+
 ## Running
 
 ```sh
-docker build -t credentials-broker:dev .
-
-docker run --rm -p 8080:8080 \
-  -v "$PWD/config.example.yaml:/etc/credentials-broker/config.yaml:ro" \
-  -e INFISICAL_BASE_URL=https://app.infisical.com \
-  -e INFISICAL_CLIENT_ID=... \
-  -e INFISICAL_CLIENT_SECRET=... \
-  credentials-broker:dev
+make docker-build
+INFISICAL_BASE_URL=https://app.infisical.com \
+  INFISICAL_CLIENT_ID=... \
+  INFISICAL_CLIENT_SECRET=... \
+  make docker-run
 ```
 
 ## License

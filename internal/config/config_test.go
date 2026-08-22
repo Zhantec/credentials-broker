@@ -53,6 +53,22 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoad_MissingFile(t *testing.T) {
+	if _, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
+		t.Fatal("expected error for missing config file")
+	}
+}
+
+func TestLoad_InvalidYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("callers: [this is not valid yaml"), 0o600); err != nil {
+		t.Fatalf("writing invalid config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+}
+
 func TestFindTarget(t *testing.T) {
 	cfg, err := Load(writeSample(t))
 	if err != nil {
@@ -87,6 +103,7 @@ func TestSecretPathAndName(t *testing.T) {
 	}{
 		{"/prod/postgres/dsn", "/prod/postgres", "dsn"},
 		{"dsn", "/", "dsn"},
+		{"/dsn", "/", "dsn"},
 	}
 	for _, c := range cases {
 		target := &Target{InfisicalSecret: c.secret}
