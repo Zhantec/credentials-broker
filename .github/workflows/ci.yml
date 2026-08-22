@@ -35,7 +35,8 @@ jobs:
           cache: true
       - run: make test
 
-  publish:
+  build:
+    name: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && 'publish' || 'build' }}
     needs: [lint, test]
     runs-on: ubuntu-latest
     permissions:
