@@ -37,6 +37,19 @@ Every request carries `Authorization: Bearer <caller-api-key>`.
 Unknown key → `401`, key not permitted for the target → `403`, unknown target
 (or one whose mode has no handler) → `404`.
 
+## Development
+
+```sh
+make run     # go run ./cmd/broker against config.example.yaml
+make test    # go test ./...
+make lint    # golangci-lint run
+make format  # gofmt + goimports
+make build   # build a local ./bin/broker binary
+```
+
+`make run` still needs `INFISICAL_BASE_URL`, `INFISICAL_CLIENT_ID`, and
+`INFISICAL_CLIENT_SECRET` set in the environment.
+
 ## Running
 
 ```sh
