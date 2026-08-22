@@ -27,7 +27,7 @@ func TestGetSecret_FetchesCachesAndInjectsToken(t *testing.T) {
 			t.Errorf("client_id = %q, want id", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"access_token": "tok-1", "expires_in": 3600}`))
+		_, _ = w.Write([]byte(`{"access_token": "tok-1", "expires_in": 3600}`))
 	}))
 	defer tokenServer.Close()
 
@@ -58,7 +58,7 @@ func TestGetSecret_RefetchesAfterExpiry(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		// expires_in <= 5 collapses to an already-past expiry (5s early-refresh
 		// margin), forcing a refetch on the very next call.
-		w.Write([]byte(`{"access_token": "tok", "expires_in": 1}`))
+		_, _ = w.Write([]byte(`{"access_token": "tok", "expires_in": 1}`))
 	}))
 	defer tokenServer.Close()
 

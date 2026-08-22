@@ -14,7 +14,7 @@ func fakeInfisical(t *testing.T) (*httptest.Server, *int, *int) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/auth/universal-auth/login", func(w http.ResponseWriter, r *http.Request) {
 		loginCalls++
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"accessToken": "test-token",
 			"expiresIn":   300,
 		})
@@ -25,7 +25,7 @@ func fakeInfisical(t *testing.T) (*httptest.Server, *int, *int) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"secret": map[string]string{"secretValue": "postgres://real-dsn"},
 		})
 	})

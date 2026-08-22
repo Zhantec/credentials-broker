@@ -26,7 +26,7 @@ func TestServe_InjectsHeaderAndForwards(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer upstream.Close()
 

@@ -26,7 +26,7 @@ func TestEndToEnd_ThroughRealMux(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
 		gotAPIKey, gotAuth = r.Header.Get("X-Api-Key"), r.Header.Get("Authorization")
-		w.Write([]byte("upstream-ok"))
+		_, _ = w.Write([]byte("upstream-ok"))
 	}))
 	defer upstream.Close()
 
@@ -34,7 +34,7 @@ func TestEndToEnd_ThroughRealMux(t *testing.T) {
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenRequests++
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"access_token": "real-token", "expires_in": 3600}`))
+		_, _ = w.Write([]byte(`{"access_token": "real-token", "expires_in": 3600}`))
 	}))
 	defer tokenServer.Close()
 
@@ -76,7 +76,7 @@ func TestEndToEnd_ThroughRealMux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("proxy request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -102,7 +102,7 @@ func TestEndToEnd_ThroughRealMux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("oauth request: %v", err)
 	}
-	defer oResp.Body.Close()
+	defer func() { _ = oResp.Body.Close() }()
 
 	if oResp.StatusCode != http.StatusOK {
 		t.Fatalf("oauth status = %d, want 200", oResp.StatusCode)
@@ -121,7 +121,7 @@ func TestEndToEnd_ThroughRealMux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second oauth request: %v", err)
 	}
-	oResp2.Body.Close()
+	_ = oResp2.Body.Close()
 
 	if tokenRequests != 1 {
 		t.Errorf("token endpoint requests = %d, want 1 (cached)", tokenRequests)

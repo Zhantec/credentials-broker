@@ -80,7 +80,7 @@ func (c *Client) GetSecret(secretPath, secretName string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("fetch secret: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -134,7 +134,7 @@ func (c *Client) accessTokenValue() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("auth request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
