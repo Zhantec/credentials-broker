@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Zhantec/credentials-broker/internal/authz"
 	"github.com/Zhantec/credentials-broker/internal/config"
 )
 
@@ -78,5 +79,11 @@ func TestNew_Routing(t *testing.T) {
 	}
 	if oauthCalls != 1 {
 		t.Errorf("oauth handler calls = %d, want 1", oauthCalls)
+	}
+}
+
+func TestOutcomeLabel_UnknownResult(t *testing.T) {
+	if got := outcomeLabel(authz.Result(99)); got != "unknown" {
+		t.Errorf("outcomeLabel(99) = %q, want %q", got, "unknown")
 	}
 }

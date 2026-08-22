@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Zhantec/credentials-broker/internal/config"
 )
@@ -71,6 +72,62 @@ func TestServe_SecretResolverError(t *testing.T) {
 
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+}
+
+func TestServe_InvalidBaseURL(t *testing.T) {
+	target := &config.Target{BaseURL: "http://foo.com/%zz", InfisicalSecret: "/prod/x/y"}
+	handler := Serve(fakeResolver{value: "s"}, http.DefaultClient)
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/x/anything", nil)
+	req.SetPathValue("rest", "anything")
+	rec := httptest.NewRecorder()
+
+	handler(rec, req, target)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestServe_PreservesTrailingSlash(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+	}))
+	defer upstream.Close()
+
+	target := &config.Target{BaseURL: upstream.URL, InjectHeader: "Authorization", InfisicalSecret: "/prod/x/y"}
+	handler := Serve(fakeResolver{value: "s"}, upstream.Client())
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/x/team-a/", nil)
+	req.SetPathValue("rest", "team-a/")
+	handler(httptest.NewRecorder(), req, target)
+
+	if gotPath != "/team-a/" {
+		t.Errorf("upstream got path=%q, want %q", gotPath, "/team-a/")
+	}
+}
+
+func TestServe_RespectsClientTimeout(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	client := upstream.Client()
+	client.Timeout = time.Second
+	target := &config.Target{BaseURL: upstream.URL, InjectHeader: "Authorization", InfisicalSecret: "/prod/x/y"}
+	handler := Serve(fakeResolver{value: "s"}, client)
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/x/anything", nil)
+	req.SetPathValue("rest", "anything")
+	rec := httptest.NewRecorder()
+
+	handler(rec, req, target)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
