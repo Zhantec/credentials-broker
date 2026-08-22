@@ -1,0 +1,20 @@
+# Binaries
+/bin/
+/credentials-broker
+*.exe
+
+# Local instance config - contains real target/caller mappings, never commit
+config.yaml
+.env
+.env.*
+!.env.example
+!config.example.yaml
+
+# Worktrees
+.worktrees/
+
+# IDE/OS
+.DS_Store
+
+# tokensave local index
+.tokensave/
