@@ -2,22 +2,19 @@
 
 ## Purpose
 
-Agents/services talk to the broker over HTTP by target name (`postgres`,
+Agents/services talk to the broker over HTTP by target name (`github`,
 `stripe`, ...). The broker resolves the target's real credential from
-Infisical and either proxies the request (injecting auth) or executes it
-on the caller's behalf (e.g. running a SQL query). The caller never sees
-the underlying secret.
+Infisical and proxies the request to the target on the caller's behalf,
+injecting either a static secret (**proxy** mode) or a short-lived OAuth2
+access token it fetches and caches on the caller's behalf (**oauth**
+mode). The caller never sees the underlying secret or client credentials.
 
 ## Non-goals (v1)
 
-- Query-level authorization or SQL parsing/allow-listing. If a target
-  needs read-only access, that's enforced by provisioning a read-only
-  Infisical credential (e.g. a Postgres role with only `SELECT` grants)
-  for that target — not by broker logic. The broker executes whatever
-  the caller sends, using whatever privileges the configured credential
-  has. Responsibility for scoping a target's blast radius sits with
-  whoever configures that target, not with broker code.
-- Execute mode beyond Postgres (other DB engines, message queues, etc.)
+- Database access (query execution, connection brokering). Scoping a
+  target's blast radius — e.g. giving an agent a database that only
+  needs OAuth-fronted API access no direct SQL surface at all — sits
+  with whoever provisions the target's credential, not with broker code.
 - mTLS / non-API-key caller auth
 - Secret rotation handling beyond a cache TTL
 - Multi-tenant / per-request audit UI (structured logs are enough for v1)
@@ -37,13 +34,14 @@ the underlying secret.
 ```yaml
 callers:
   - key: "sk_agent_abcdef..."       # bearer token the caller presents
-    targets: ["postgres", "stripe"]  # target names this key may use
+    targets: ["github", "stripe"]    # target names this key may use
 
 targets:
-  - name: postgres
-    mode: execute
-    driver: postgres
-    infisical_secret: "/prod/postgres/dsn"   # full DSN, or broken into fields — TBD at implementation
+  - name: github
+    mode: oauth
+    base_url: "https://api.github.com"
+    infisical_secret: "/prod/github/oauth_client"
+    # secret is a JSON blob: {"client_id", "client_secret", "token_url", "scope"}
 
   - name: stripe
     mode: proxy
@@ -62,21 +60,22 @@ targets:
    - Target name not in config → `404`.
 3. Broker resolves the secret for that target (cache, else fetch from
    Infisical; `502` if Infisical is unreachable).
-4. Dispatch by mode:
-   - **proxy** (`POST/GET /proxy/{target}/*`): forward the request to
-     `base_url + remaining path`, injecting the secret into
-     `inject_header` (with `inject_prefix`), stream the upstream
-     response back verbatim. `502` if the upstream target is
-     unreachable.
-   - **execute** (`POST /execute/{target}`): body is
-     `{"query": "..."}`. Broker opens a connection using the resolved
-     DSN and runs the query as-is, returns rows as JSON
-     (`{"columns": [...], "rows": [[...], ...]}`). `500` with a
-     generic message on query error — the raw driver error is logged
-     server-side only (it can leak schema/DSN details).
-5. Secret material is never included in response bodies, error bodies,
+4. Both modes serve `/proxy/{target}/*`: forward the request to
+   `base_url + remaining path`, injecting a credential into
+   `inject_header` (with `inject_prefix`), stream the upstream response
+   back verbatim. `502` if the upstream target is unreachable. The mode
+   determines where the injected value comes from:
+   - **proxy**: the resolved Infisical secret, used as-is.
+   - **oauth**: the resolved Infisical secret is a client-credentials
+     blob (`client_id`, `client_secret`, `token_url`, optional `scope`).
+     The broker exchanges it for an access token via the OAuth2
+     `client_credentials` grant (RFC 6749 §4.4), caches the token until
+     shortly before it expires, and injects the token. `502` if the
+     token endpoint is unreachable or rejects the credentials.
+5. Secret material — static secrets, client credentials, and issued
+   access tokens — is never included in response bodies, error bodies,
    or log lines. Logs record: caller key (or a stable hash of it),
-   target name, mode, and outcome — never the resolved secret.
+   target name, and outcome — never the resolved credential.
 
 ## Testing
 
@@ -84,18 +83,15 @@ targets:
   Infisical response caching/TTL.
 - One `httptest`-based smoke test for proxy mode (fake upstream server,
   assert the injected header + forwarded body/path).
-- One smoke test for execute mode against a local Postgres (or a
-  minimal fake driver if that's not available in CI) — assert query
-  results round-trip and a bad query returns a generic `500` without
-  leaking driver internals.
+- One smoke test for oauth mode (fake token endpoint + fake upstream) —
+  assert the token is fetched once, cached within TTL, refetched after
+  expiry, and injected as the header value.
 - No testcontainers, no fixture frameworks — plain `net/http/httptest`
   and Go's standard `testing` package.
 
 ## Open questions for later (not blocking v1)
 
-- Exact shape of the Postgres DSN in Infisical: one string vs.
-  host/port/user/pass/db as separate fields. Decide at implementation
-  time based on what's actually easiest to rotate in Infisical.
-- Whether `execute` mode needs a query timeout / row limit to avoid a
-  caller accidentally hammering the DB. Worth a default timeout even in
-  v1 — cheap to add, cheap to regret not having.
+- Whether the oauth token cache needs to be shared/persisted across
+  broker replicas, or per-instance in-memory caching (current
+  implementation) is fine given each replica just refetches on a cache
+  miss.

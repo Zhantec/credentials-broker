@@ -21,7 +21,6 @@ type Caller struct {
 type Target struct {
 	Name            string `yaml:"name"`
 	Mode            string `yaml:"mode"`
-	Driver          string `yaml:"driver,omitempty"`
 	BaseURL         string `yaml:"base_url,omitempty"`
 	InjectHeader    string `yaml:"inject_header,omitempty"`
 	InjectPrefix    string `yaml:"inject_prefix,omitempty"`

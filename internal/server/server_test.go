@@ -12,11 +12,11 @@ func testConfig() *config.Config {
 	return &config.Config{
 		Callers: []config.Caller{
 			{Key: "sk_ok", Targets: []string{"stripe"}},
-			{Key: "sk_both", Targets: []string{"stripe", "postgres"}},
+			{Key: "sk_both", Targets: []string{"stripe", "github"}},
 		},
 		Targets: []config.Target{
 			{Name: "stripe", Mode: "proxy"},
-			{Name: "postgres", Mode: "execute"},
+			{Name: "github", Mode: "oauth"},
 		},
 	}
 }
@@ -29,9 +29,12 @@ func recordingHandler(calls *int) DispatchFunc {
 }
 
 func TestNew_Routing(t *testing.T) {
-	var proxyCalls, executeCalls int
+	var proxyCalls, oauthCalls int
 	cfg := testConfig()
-	handler := New(cfg, recordingHandler(&proxyCalls), recordingHandler(&executeCalls))
+	handler := New(cfg, map[string]DispatchFunc{
+		"proxy": recordingHandler(&proxyCalls),
+		"oauth": recordingHandler(&oauthCalls),
+	})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -44,11 +47,14 @@ func TestNew_Routing(t *testing.T) {
 	}{
 		{"missing key", http.MethodGet, "/proxy/stripe/v1/x", "", http.StatusUnauthorized},
 		{"unknown target", http.MethodGet, "/proxy/nope/v1/x", "Bearer sk_ok", http.StatusNotFound},
-		{"not permitted", http.MethodPost, "/execute/postgres", "Bearer sk_ok", http.StatusForbidden},
+		{"not permitted", http.MethodGet, "/proxy/github/v1/x", "Bearer sk_ok", http.StatusForbidden},
 		{"allowed proxy", http.MethodGet, "/proxy/stripe/v1/x", "Bearer sk_ok", http.StatusOK},
-		{"execute target via proxy route", http.MethodGet, "/proxy/postgres/v1/x", "Bearer sk_both", http.StatusNotFound},
-		{"proxy target via execute route", http.MethodPost, "/execute/stripe", "Bearer sk_both", http.StatusNotFound},
+		{"allowed oauth", http.MethodGet, "/proxy/github/v1/x", "Bearer sk_both", http.StatusOK},
+		{"unknown mode", http.MethodGet, "/proxy/unmapped/v1/x", "Bearer sk_unmapped", http.StatusNotFound},
 	}
+
+	cfg.Callers = append(cfg.Callers, config.Caller{Key: "sk_unmapped", Targets: []string{"unmapped"}})
+	cfg.Targets = append(cfg.Targets, config.Target{Name: "unmapped", Mode: "no-such-mode"})
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -69,5 +75,8 @@ func TestNew_Routing(t *testing.T) {
 
 	if proxyCalls != 1 {
 		t.Errorf("proxy handler calls = %d, want 1", proxyCalls)
+	}
+	if oauthCalls != 1 {
+		t.Errorf("oauth handler calls = %d, want 1", oauthCalls)
 	}
 }

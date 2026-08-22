@@ -1,17 +1,14 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-
 	"github.com/Zhantec/credentials-broker/internal/config"
-	"github.com/Zhantec/credentials-broker/internal/execute"
+	"github.com/Zhantec/credentials-broker/internal/oauth"
 	"github.com/Zhantec/credentials-broker/internal/proxy"
 	"github.com/Zhantec/credentials-broker/internal/secrets"
 	"github.com/Zhantec/credentials-broker/internal/server"
@@ -34,12 +31,13 @@ func main() {
 		cfg.Infisical.WorkspaceID,
 		cfg.Infisical.Environment,
 	)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	oauthClient := oauth.NewClient(secretsClient, httpClient)
 
-	handler := server.New(
-		cfg,
-		proxy.Serve(secretsClient, &http.Client{Timeout: 30 * time.Second}),
-		execute.Serve(secretsClient, openDB),
-	)
+	handler := server.New(cfg, map[string]server.DispatchFunc{
+		"proxy": proxy.Serve(secretsClient, httpClient),
+		"oauth": proxy.Serve(oauthClient, httpClient),
+	})
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -55,11 +53,4 @@ func main() {
 	}
 	log.Printf("credentials-broker listening on %s", addr)
 	log.Fatal(srv.ListenAndServe())
-}
-
-func openDB(driverName, dsn string) (*sql.DB, error) {
-	if driverName != "postgres" {
-		return nil, fmt.Errorf("unsupported driver %q", driverName)
-	}
-	return sql.Open("pgx", dsn)
 }

@@ -13,20 +13,24 @@ import (
 
 type DispatchFunc func(w http.ResponseWriter, r *http.Request, target *config.Target)
 
-func New(cfg *config.Config, proxyHandler, executeHandler DispatchFunc) http.Handler {
+// New builds the broker's HTTP handler. handlers maps a target's configured
+// mode (e.g. "proxy", "oauth") to the DispatchFunc that serves it; every
+// mode shares the same /proxy/{target}/{rest...} forwarding contract, so
+// there's one route dispatching by target.Mode rather than one route per
+// mode.
+func New(cfg *config.Config, handlers map[string]DispatchFunc) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/proxy/{target}/{rest...}", withAuthz(cfg, "proxy", proxyHandler))
-	mux.HandleFunc("POST /execute/{target}", withAuthz(cfg, "execute", executeHandler))
+	mux.HandleFunc("/proxy/{target}/{rest...}", withAuthz(cfg, handlers))
 	return mux
 }
 
-func withAuthz(cfg *config.Config, mode string, next DispatchFunc) http.HandlerFunc {
+func withAuthz(cfg *config.Config, handlers map[string]DispatchFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		targetName := r.PathValue("target")
 		key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 
 		result := authz.Check(cfg, key, targetName)
-		log.Printf("caller=%s target=%s mode=%s outcome=%s", hashKey(key), targetName, mode, outcomeLabel(result))
+		log.Printf("caller=%s target=%s outcome=%s", hashKey(key), targetName, outcomeLabel(result))
 
 		switch result {
 		case authz.Unauthenticated:
@@ -41,13 +45,14 @@ func withAuthz(cfg *config.Config, mode string, next DispatchFunc) http.HandlerF
 		}
 
 		target, _ := cfg.FindTarget(targetName)
-		// A target that exists but isn't reachable via this route is
-		// indistinguishable, to the caller, from one that doesn't exist.
-		if target.Mode != mode {
+		handler, ok := handlers[target.Mode]
+		if !ok {
+			// A target whose mode has no registered handler is
+			// indistinguishable, to the caller, from one that doesn't exist.
 			http.Error(w, "target not found", http.StatusNotFound)
 			return
 		}
-		next(w, r, target)
+		handler(w, r, target)
 	}
 }
 
