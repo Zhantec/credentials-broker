@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Zhantec/credentials-broker/internal/config"
+	"github.com/Zhantec/credentials-broker/internal/reqctx"
 )
 
 type SecretResolver interface {
@@ -24,14 +25,14 @@ func Serve(secrets SecretResolver, httpClient *http.Client) func(http.ResponseWr
 		secretPath, secretName := target.SecretPathAndName()
 		secret, err := secrets.GetSecret(secretPath, secretName)
 		if err != nil {
-			log.Printf("proxy: resolving secret for target %s: %v", target.Name, err)
+			log.Printf("caller=%s target=%s outcome=error stage=resolve_secret err=%v", reqctx.Caller(r.Context()), target.Name, err)
 			http.Error(w, "secret unavailable", http.StatusBadGateway)
 			return
 		}
 
 		base, err := url.Parse(target.BaseURL)
 		if err != nil {
-			log.Printf("proxy: parsing base_url for target %s: %v", target.Name, err)
+			log.Printf("caller=%s target=%s outcome=error stage=parse_base_url err=%v", reqctx.Caller(r.Context()), target.Name, err)
 			http.Error(w, "bad upstream request", http.StatusInternalServerError)
 			return
 		}
@@ -62,7 +63,7 @@ func Serve(secrets SecretResolver, httpClient *http.Client) func(http.ResponseWr
 				pr.Out.Header.Set(target.InjectHeader, target.InjectPrefix+secret)
 			},
 			ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-				log.Printf("proxy: upstream request for target %s failed: %v", target.Name, err)
+				log.Printf("caller=%s target=%s outcome=error stage=upstream_request err=%v", reqctx.Caller(r.Context()), target.Name, err)
 				http.Error(w, "upstream unreachable", http.StatusBadGateway)
 			},
 		}

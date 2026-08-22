@@ -9,6 +9,7 @@ import (
 
 	"github.com/Zhantec/credentials-broker/internal/authz"
 	"github.com/Zhantec/credentials-broker/internal/config"
+	"github.com/Zhantec/credentials-broker/internal/reqctx"
 )
 
 type DispatchFunc func(w http.ResponseWriter, r *http.Request, target *config.Target)
@@ -29,8 +30,9 @@ func withAuthz(cfg *config.Config, handlers map[string]DispatchFunc) http.Handle
 		targetName := r.PathValue("target")
 		key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 
+		callerHash := hashKey(key)
 		result := authz.Check(cfg, key, targetName)
-		log.Printf("caller=%s target=%s outcome=%s", hashKey(key), targetName, outcomeLabel(result))
+		log.Printf("caller=%s target=%s outcome=%s", callerHash, targetName, outcomeLabel(result))
 
 		switch result {
 		case authz.Unauthenticated:
@@ -52,6 +54,7 @@ func withAuthz(cfg *config.Config, handlers map[string]DispatchFunc) http.Handle
 			http.Error(w, "target not found", http.StatusNotFound)
 			return
 		}
+		r = r.WithContext(reqctx.WithCaller(r.Context(), callerHash))
 		handler(w, r, target)
 	}
 }
