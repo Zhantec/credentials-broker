@@ -1,15 +1,53 @@
 # credentials-broker
 
-A blackbox credentials broker for AI agents. Agents and services talk to the
-broker over HTTP by target name (e.g. `postgres`, `stripe`) and a reason; the
-broker resolves the target against [Infisical](https://infisical.com), holds
-the real credential itself, and either proxies the request (injecting auth
-headers) or executes it on the caller's behalf (e.g. running a SQL query) —
-the caller never sees the underlying secret.
+A blackbox credentials broker for AI agents. Callers authenticate to the broker
+with an API key that lists the targets they may use; the broker resolves each
+target's real credential from [Infisical](https://infisical.com), holds it
+itself, and acts on the caller's behalf — either proxying an HTTP request to an
+upstream API with the secret injected as a header (**proxy** mode) or running a
+SQL query against Postgres using the secret as the DSN (**execute** mode). The
+caller never sees the underlying secret.
 
-Runs as a Docker container, deployed via Portainer.
+See [`docs/spec.md`](docs/spec.md) for the full spec.
 
-**Status:** design phase — see `docs/` for the spec once it lands.
+## Configuration
+
+Targets and caller keys live in a YAML file — see
+[`config.example.yaml`](config.example.yaml).
+
+| Environment variable | Required | Default |
+| --- | --- | --- |
+| `CONFIG_PATH` | no | `/etc/credentials-broker/config.yaml` |
+| `PORT` | no | `8080` |
+| `INFISICAL_BASE_URL` | yes | — |
+| `INFISICAL_CLIENT_ID` | yes | — |
+| `INFISICAL_CLIENT_SECRET` | yes | — |
+
+## Routes
+
+Every request carries `Authorization: Bearer <caller-api-key>`.
+
+- `/proxy/{target}/{rest...}` — forwards method, path, query and body to the
+  target's `base_url`, injecting the resolved secret into the configured
+  header, and streams the upstream response back.
+- `POST /execute/{target}` — body `{"query": "..."}`; returns
+  `{"columns": [...], "rows": [[...]], "truncated": false}`.
+
+Unknown key → `401`, key not permitted for the target → `403`, unknown target
+(or one not reachable via that route's mode) → `404`.
+
+## Running
+
+```sh
+docker build -t credentials-broker:dev .
+
+docker run --rm -p 8080:8080 \
+  -v "$PWD/config.example.yaml:/etc/credentials-broker/config.yaml:ro" \
+  -e INFISICAL_BASE_URL=https://app.infisical.com \
+  -e INFISICAL_CLIENT_ID=... \
+  -e INFISICAL_CLIENT_SECRET=... \
+  credentials-broker:dev
+```
 
 ## License
 

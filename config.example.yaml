@@ -1,0 +1,20 @@
+infisical:
+  workspace_id: "your-workspace-id"
+  environment: "prod"
+
+callers:
+  - key: "sk_agent_replace_me"
+    targets: ["postgres", "stripe"]
+
+targets:
+  - name: postgres
+    mode: execute
+    driver: postgres
+    infisical_secret: "/prod/postgres/dsn"
+
+  - name: stripe
+    mode: proxy
+    base_url: "https://api.stripe.com"
+    infisical_secret: "/prod/stripe/api_key"
+    inject_header: "Authorization"
+    inject_prefix: "Bearer "
