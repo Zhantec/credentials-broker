@@ -8,8 +8,6 @@
 
 **Tech Stack:** Go 1.25, `net/http` `ServeMux` (Go 1.22+ path-value wildcards), `database/sql` + `modernc.org/sqlite` (pure-Go, CGO-free — required by the `CGO_ENABLED=0` Dockerfile build).
 
-**Spec:** `docs/superpowers/specs/2026-08-22-db-backed-config-design.md`
-
 ## Global Constraints
 
 - No CGO: the SQLite driver must be `modernc.org/sqlite` (pure Go), not `mattn/go-sqlite3`. `Dockerfile` builds with `CGO_ENABLED=0`.
@@ -2308,9 +2306,10 @@ git commit -m "chore: remove YAML config loader, superseded by internal/store"
 
 ---
 
-### Task 11: Docs — README, Makefile
+### Task 11: Docs — spec.md, README, Makefile
 
 **Files:**
+- Modify: `docs/spec.md`
 - Modify: `README.md`
 - Modify: `Makefile`
 
@@ -2321,12 +2320,78 @@ git commit -m "chore: remove YAML config loader, superseded by internal/store"
 
 Run: `cat README.md Makefile`
 
-- [ ] **Step 2: Update `README.md`**
+- [ ] **Step 2: Update `docs/spec.md`**
+
+This is the repo's existing authoritative v1 design doc (`CLAUDE.md` links to it as "Full spec"). It still describes the YAML config file this migration removes. Apply these edits:
+
+Replace the **Components** section's config-file bullet:
+
+```markdown
+- **Config file**: static YAML, mounted into the container (path via
+  `CONFIG_PATH` env var, default `/etc/credentials-broker/config.yaml`).
+```
+
+with:
+
+```markdown
+- **Store**: embedded SQLite database (path via `DB_PATH` env var,
+  default `credentials-broker.db`), holding targets and callers.
+  Managed at runtime through the admin HTTP API below — no file to
+  mount or SCP.
+- **Admin API**: `/admin/targets` and `/admin/callers`
+  (create/list/delete), gated by a single bootstrap `ADMIN_API_KEY` env
+  var. The broker fails to start if it's unset.
+```
+
+Replace the entire **Config format** section (the YAML code block and
+its heading) with:
+
+````markdown
+## Admin API
+
+All `/admin/*` routes require `Authorization: Bearer <ADMIN_API_KEY>`.
+
+```bash
+curl -X POST http://localhost:8080/admin/targets \
+  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "stripe",
+    "mode": "proxy",
+    "base_url": "https://api.stripe.com",
+    "infisical_workspace_id": "ws-123",
+    "infisical_environment": "prod",
+    "infisical_secret": "/prod/stripe/api_key"
+  }'
+# inject_header/inject_prefix are optional, defaulting to
+# "Authorization"/"Bearer ".
+
+curl -X POST http://localhost:8080/admin/callers \
+  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"targets": ["stripe"]}'
+# targets is optional; omitted/empty means the caller may use every
+# target currently registered on this broker (dynamic all-access).
+# The response's "key" field is the caller's bearer token for
+# /proxy/* — it is generated here and never shown again.
+```
+
+`GET /admin/targets`, `GET /admin/callers`, `DELETE /admin/targets/{name}`,
+and `DELETE /admin/callers/{id}` round out create/list/delete for both
+resources. There is no update or get-by-id endpoint.
+````
+
+Update **Request flow** step 2 from "Broker looks up the key in config."
+to "Broker looks up the key in the store." (same three outcomes:
+missing/unknown key → `401`; key doesn't cover the requested target →
+`403`; target name not registered → `404`).
+
+- [ ] **Step 3: Update `README.md`**
 
 Remove any mention of `CONFIG_PATH` and the YAML config format. Add:
 - `DB_PATH` env var (optional, default `credentials-broker.db`) — path to the SQLite database file.
 - `ADMIN_API_KEY` env var (required) — bootstrap secret for the admin API; the broker fails to start without it.
-- A section documenting the admin API, using the request/response shapes from `docs/superpowers/specs/2026-08-22-db-backed-config-design.md`'s "Admin API" section (reproduce those `curl` examples in the README's existing style, e.g.):
+- A section documenting the admin API — create/list/delete for targets and callers, matching the request/response shapes implemented in Tasks 6–7 (`internal/server/admin_targets.go`, `internal/server/admin_callers.go`). Reproduce those `curl` examples in the README's existing style, e.g.:
 
 ```bash
 curl -X POST http://localhost:8080/admin/targets \
@@ -2347,7 +2412,7 @@ curl -X POST http://localhost:8080/admin/callers \
   -d '{"targets": ["stripe"]}'
 ```
 
-- [ ] **Step 3: Update the `Makefile`'s `docker-run` target**
+- [ ] **Step 4: Update the `Makefile`'s `docker-run` target**
 
 Replace the `config.example.yaml` volume mount with a SQLite data volume and the new required env var. The existing target likely resembles:
 
@@ -2376,10 +2441,10 @@ docker-run:
 
 Adjust indentation/variable names to match whatever the actual current target uses (confirmed in Step 1) — the delta is: drop the config-file volume mount and `CONFIG_PATH`, add a `/data` volume mount, `DB_PATH`, and `ADMIN_API_KEY`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add README.md Makefile
+git add docs/spec.md README.md Makefile
 git commit -m "docs: document DB_PATH, ADMIN_API_KEY, and the admin API"
 ```
 
@@ -2387,6 +2452,6 @@ git commit -m "docs: document DB_PATH, ADMIN_API_KEY, and the admin API"
 
 ## Self-Review
 
-- **Spec coverage:** Data model (Tasks 1–2), Admin API create/list/delete for both targets and callers (Tasks 6–7), auth model incl. fail-closed + constant-time compare (Task 5), multi-project Infisical support (Task 3), migration/removal of YAML config (Task 10), testing approach — `:memory:` SQLite, table-driven (Tasks 1–2, 4, 6–8), docs updates (Task 11). All spec sections have a task.
+- **Design coverage:** Data model (Tasks 1–2), Admin API create/list/delete for both targets and callers (Tasks 6–7), auth model incl. fail-closed + constant-time compare (Task 5), multi-project Infisical support (Task 3), migration/removal of YAML config (Task 10), testing approach — `:memory:` SQLite, table-driven (Tasks 1–2, 4, 6–8), docs updates incl. the repo's `docs/spec.md` (Task 11). Every design decision reached during brainstorming has a task.
 - **Placeholder scan:** No TBD/TODO markers; every code step contains complete, compilable Go source. Task 9's Step 2 explicitly tells the implementer to reconcile against the real file content read in Step 1 rather than blindly overwrite, since `main.go`'s exact current shutdown/timeout handling wasn't fully captured verbatim in this plan.
 - **Type consistency:** `store.Target`/`store.Caller` field names are defined once in Task 1/2 and reused verbatim in Tasks 3–8 (`proxy.go`, `authz.go`, `admin_targets.go`, `admin_callers.go`, tests). `server.DispatchFunc`'s signature (`*store.Target`) matches `proxy.Serve`'s return type from Task 3. `authz.Check`'s `(Result, error)` return and `Result` enum values (`Allowed, Unauthenticated, Forbidden, TargetNotFound`) are defined once in Task 4 and consumed identically in Task 5's `withAuthz`. `server.New`'s `(http.Handler, error)` signature (Task 5) is used consistently in every test helper from Task 6 onward.
