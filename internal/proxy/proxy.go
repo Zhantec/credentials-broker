@@ -9,21 +9,21 @@ import (
 	"path"
 	"strings"
 
-	"github.com/Zhantec/credentials-broker/internal/config"
 	"github.com/Zhantec/credentials-broker/internal/reqctx"
+	"github.com/Zhantec/credentials-broker/internal/store"
 )
 
 type SecretResolver interface {
-	GetSecret(secretPath, secretName string) (string, error)
+	GetSecret(workspaceID, environment, secretPath, secretName string) (string, error)
 }
 
 // Serve returns a dispatch function for proxy-mode targets: it resolves the
 // target's secret, forwards the request to target.BaseURL with the secret
 // injected as a header, and streams the upstream response back verbatim.
-func Serve(secrets SecretResolver, httpClient *http.Client) func(http.ResponseWriter, *http.Request, *config.Target) {
-	return func(w http.ResponseWriter, r *http.Request, target *config.Target) {
+func Serve(secrets SecretResolver, httpClient *http.Client) func(http.ResponseWriter, *http.Request, *store.Target) {
+	return func(w http.ResponseWriter, r *http.Request, target *store.Target) {
 		secretPath, secretName := target.SecretPathAndName()
-		secret, err := secrets.GetSecret(secretPath, secretName)
+		secret, err := secrets.GetSecret(target.InfisicalWorkspaceID, target.InfisicalEnvironment, secretPath, secretName)
 		if err != nil {
 			log.Printf("caller=%s target=%s outcome=error stage=resolve_secret err=%v", reqctx.Caller(r.Context()), target.Name, err)
 			http.Error(w, "secret unavailable", http.StatusBadGateway)

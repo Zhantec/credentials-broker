@@ -1,7 +1,14 @@
+// Package authz decides whether a presented caller key may reach a
+// given target.
 package authz
 
-import "github.com/Zhantec/credentials-broker/internal/config"
+import (
+	"fmt"
 
+	"github.com/Zhantec/credentials-broker/internal/store"
+)
+
+// Result is the outcome of an authorization check.
 type Result int
 
 const (
@@ -11,25 +18,32 @@ const (
 	TargetNotFound
 )
 
-// Check authenticates the caller before revealing anything about the
-// target, so an invalid key can't be used to probe which target names
-// exist.
-func Check(cfg *config.Config, key, targetName string) Result {
-	caller, ok := cfg.FindCaller(key)
+// Check authenticates caller before revealing anything about target, so
+// an invalid key can't be used to probe target names exist.
+func Check(s *store.Store, key, targetName string) (Result, error) {
+	caller, ok, err := s.FindCallerByKey(key)
+	if err != nil {
+		return 0, fmt.Errorf("looking up caller: %w", err)
+	}
 	if !ok {
-		return Unauthenticated
+		return Unauthenticated, nil
 	}
 
-	_, ok = cfg.FindTarget(targetName)
+	_, ok, err = s.FindTarget(targetName)
+	if err != nil {
+		return 0, fmt.Errorf("looking up target: %w", err)
+	}
 	if !ok {
-		return TargetNotFound
+		return TargetNotFound, nil
 	}
 
+	if caller.AllAccess {
+		return Allowed, nil
+	}
 	for _, t := range caller.Targets {
 		if t == targetName {
-			return Allowed
+			return Allowed, nil
 		}
 	}
-
-	return Forbidden
+	return Forbidden, nil
 }

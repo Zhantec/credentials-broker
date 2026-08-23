@@ -23,41 +23,57 @@ mode). The caller never sees the underlying secret or client credentials.
 
 - **Go HTTP service**, single binary, runs as a Docker container
   (deployed via Portainer).
-- **Config file**: static YAML, mounted into the container (path via
-  `CONFIG_PATH` env var, default `/etc/credentials-broker/config.yaml`).
+- **Store**: embedded SQLite database (path via `DB_PATH` env var,
+  default `credentials-broker.db`), holding targets and callers.
+  Managed at runtime through the admin HTTP API below — no file to
+  mount or SCP.
+- **Admin API**: `/admin/targets` and `/admin/callers`
+  (create/list/delete), gated by a single bootstrap `ADMIN_API_KEY` env
+  var. The broker fails to start if it's unset.
 - **Infisical client**: Universal Auth (`INFISICAL_CLIENT_ID` /
   `INFISICAL_CLIENT_SECRET` env vars), fetches secrets per target and
   caches them in memory with a TTL.
 
-## Config format
+## Admin API
 
-```yaml
-callers:
-  - key: "sk_agent_abcdef..."       # bearer token the caller presents
-    targets: ["github", "stripe"]    # target names this key may use
+All `/admin/*` routes require `Authorization: Bearer <ADMIN_API_KEY>`.
 
-targets:
-  - name: github
-    mode: oauth
-    base_url: "https://api.github.com"
-    infisical_secret: "/prod/github/oauth_client"
-    # secret is a JSON blob: {"client_id", "client_secret", "token_url", "scope"}
+```bash
+curl -X POST http://localhost:8080/admin/targets \
+  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "stripe",
+    "mode": "proxy",
+    "base_url": "https://api.stripe.com",
+    "infisical_workspace_id": "ws-123",
+    "infisical_environment": "prod",
+    "infisical_secret": "/prod/stripe/api_key"
+  }'
+# inject_header/inject_prefix are optional, defaulting to
+# "Authorization"/"Bearer ".
 
-  - name: stripe
-    mode: proxy
-    base_url: "https://api.stripe.com"
-    infisical_secret: "/prod/stripe/api_key"
-    inject_header: "Authorization"
-    inject_prefix: "Bearer "
+curl -X POST http://localhost:8080/admin/callers \
+  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"targets": ["stripe"]}'
+# targets is optional; omitted/empty means the caller may use every
+# target currently registered on this broker (dynamic all-access).
+# The response's "key" field is the caller's bearer token for
+# /proxy/* — it is generated here and never shown again.
 ```
+
+`GET /admin/targets`, `GET /admin/callers`, `DELETE /admin/targets/{name}`,
+and `DELETE /admin/callers/{id}` round out create/list/delete for both
+resources. There is no update or get-by-id endpoint.
 
 ## Request flow
 
 1. Caller sends `Authorization: Bearer <api-key>` with the request.
-2. Broker looks up the key in config.
+2. Broker looks up the key in the store.
    - Missing/unknown key → `401`.
    - Key doesn't list the requested target → `403`.
-   - Target name not in config → `404`.
+   - Target name not registered → `404`.
 3. Broker resolves the secret for that target (cache, else fetch from
    Infisical; `502` if Infisical is unreachable).
 4. Both modes serve `/proxy/{target}/*`: forward the request to

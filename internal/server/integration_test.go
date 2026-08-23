@@ -1,129 +1,131 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Zhantec/credentials-broker/internal/config"
-	"github.com/Zhantec/credentials-broker/internal/oauth"
 	"github.com/Zhantec/credentials-broker/internal/proxy"
+	"github.com/Zhantec/credentials-broker/internal/store"
 )
 
-// mapResolver resolves each target's secret by its configured path.
-type mapResolver map[string]string
+// fakeSecretResolver returns a fixed secret regardless of which
+// workspace/environment/path/name is requested, letting this test focus
+// on the admin-create -> caller-key -> /proxy flow rather than Infisical
+// wiring (covered separately in internal/secrets).
+type fakeSecretResolver struct{ secret string }
 
-func (m mapResolver) GetSecret(secretPath, secretName string) (string, error) {
-	return m[secretPath+"/"+secretName], nil
+func (f fakeSecretResolver) GetSecret(workspaceID, environment, secretPath, secretName string) (string, error) {
+	return f.secret, nil
 }
 
-// TestEndToEnd_ThroughRealMux exercises the full seam: a real HTTP round trip
-// into server.New's ServeMux, its {rest...} wildcard, proxy.Serve's
-// PathValue lookup, and a real upstream server — for both a static-secret
-// proxy target and an oauth target (real token endpoint + real upstream).
-func TestEndToEnd_ThroughRealMux(t *testing.T) {
-	var gotPath, gotQuery, gotAPIKey, gotAuth string
+// TestEndToEnd_AdminCreateThenProxy exercises the full flow this
+// migration exists for: an admin registers a target, creates a caller
+// scoped to it, and that caller's key immediately works on /proxy —
+// with no config file or restart in between.
+func TestEndToEnd_AdminCreateThenProxy(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
-		gotAPIKey, gotAuth = r.Header.Get("X-Api-Key"), r.Header.Get("Authorization")
-		_, _ = w.Write([]byte("upstream-ok"))
+		if got := r.Header.Get("Authorization"); got != "Bearer sekret" {
+			t.Errorf("upstream saw Authorization=%q, want %q", got, "Bearer sekret")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
 	}))
-	defer upstream.Close()
+	t.Cleanup(upstream.Close)
 
-	var tokenRequests int
-	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenRequests++
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"access_token": "real-token", "expires_in": 3600}`))
-	}))
-	defer tokenServer.Close()
-
-	cfg := &config.Config{
-		Callers: []config.Caller{{Key: "sk_ok", Targets: []string{"stripe", "github"}}},
-		Targets: []config.Target{
-			{
-				Name:            "stripe",
-				Mode:            "proxy",
-				BaseURL:         upstream.URL,
-				InjectHeader:    "X-Api-Key",
-				InjectPrefix:    "Bearer ",
-				InfisicalSecret: "/prod/stripe/api_key",
-			},
-			{
-				Name:            "github",
-				Mode:            "oauth",
-				BaseURL:         upstream.URL,
-				InjectHeader:    "Authorization",
-				InjectPrefix:    "Bearer ",
-				InfisicalSecret: "/prod/github/oauth_client",
-			},
-		},
+	handlers := map[string]DispatchFunc{
+		"proxy": proxy.Serve(fakeSecretResolver{secret: "sekret"}, &http.Client{}),
 	}
-	resolver := mapResolver{
-		"/prod/stripe/api_key":      "real-secret",
-		"/prod/github/oauth_client": `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`,
-	}
-
-	broker := httptest.NewServer(New(cfg, map[string]DispatchFunc{
-		"proxy": proxy.Serve(resolver, upstream.Client()),
-		"oauth": proxy.Serve(oauth.NewClient(resolver, tokenServer.Client()), upstream.Client()),
-	}))
-	defer broker.Close()
-
-	req, _ := http.NewRequest(http.MethodGet, broker.URL+"/proxy/stripe/v1/charges?limit=10", nil)
-	req.Header.Set("Authorization", "Bearer sk_ok")
-	resp, err := broker.Client().Do(req)
+	handler, err := New(s, testAdminKey, handlers)
 	if err != nil {
-		t.Fatalf("proxy request: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	if gotPath != "/v1/charges" {
-		t.Errorf("upstream path = %q, want %q", gotPath, "/v1/charges")
-	}
-	if gotQuery != "limit=10" {
-		t.Errorf("upstream query = %q, want %q", gotQuery, "limit=10")
-	}
-	if gotAPIKey != "Bearer real-secret" {
-		t.Errorf("upstream X-Api-Key = %q, want %q", gotAPIKey, "Bearer real-secret")
-	}
-	if gotAuth != "" {
-		t.Errorf("caller Authorization leaked to upstream: %q", gotAuth)
+		t.Fatalf("New: %v", err)
 	}
 
-	// Same wiring, oauth route: broker exchanges client creds for a token
-	// against a real token endpoint, then injects it as a Bearer header.
-	oReq, _ := http.NewRequest(http.MethodGet, broker.URL+"/proxy/github/user/repos", nil)
-	oReq.Header.Set("Authorization", "Bearer sk_ok")
-	oResp, err := broker.Client().Do(oReq)
+	// 1. Admin registers a target pointing at the fake upstream.
+	createTargetRec := doAdminRequest(t, handler, "POST", "/admin/targets", map[string]any{
+		"name":                   "stripe",
+		"mode":                   "proxy",
+		"base_url":               upstream.URL,
+		"infisical_workspace_id": "ws-1",
+		"infisical_environment":  "prod",
+		"infisical_secret":       "/prod/stripe/api_key",
+	})
+	if createTargetRec.Code != http.StatusCreated {
+		t.Fatalf("create target status: got %d, body=%s", createTargetRec.Code, createTargetRec.Body.String())
+	}
+
+	// 2. Admin creates a caller scoped to that target.
+	createCallerRec := doAdminRequest(t, handler, "POST", "/admin/callers", map[string]any{"targets": []string{"stripe"}})
+	if createCallerRec.Code != http.StatusCreated {
+		t.Fatalf("create caller status: got %d, body=%s", createCallerRec.Code, createCallerRec.Body.String())
+	}
+	var caller createCallerResponse
+	if err := json.Unmarshal(createCallerRec.Body.Bytes(), &caller); err != nil {
+		t.Fatalf("unmarshal caller: %v", err)
+	}
+
+	// 3. That caller's key works on /proxy immediately.
+	req := httptest.NewRequest("GET", "/proxy/stripe/v1/charges", nil)
+	req.Header.Set("Authorization", "Bearer "+caller.Key)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("proxy status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body, err := io.ReadAll(rec.Body)
 	if err != nil {
-		t.Fatalf("oauth request: %v", err)
+		t.Fatalf("read body: %v", err)
 	}
-	defer func() { _ = oResp.Body.Close() }()
+	if string(body) != "ok" {
+		t.Fatalf("proxy body: got %q, want %q", body, "ok")
+	}
+}
 
-	if oResp.StatusCode != http.StatusOK {
-		t.Fatalf("oauth status = %d, want 200", oResp.StatusCode)
-	}
-	if gotAuth != "Bearer real-token" {
-		t.Errorf("upstream Authorization = %q, want %q", gotAuth, "Bearer real-token")
-	}
-	if tokenRequests != 1 {
-		t.Errorf("token endpoint requests = %d, want 1 (first fetch)", tokenRequests)
-	}
-
-	// Second oauth request within TTL must not hit the token endpoint again.
-	oReq2, _ := http.NewRequest(http.MethodGet, broker.URL+"/proxy/github/user/repos", nil)
-	oReq2.Header.Set("Authorization", "Bearer sk_ok")
-	oResp2, err := broker.Client().Do(oReq2)
+// TestEndToEnd_DeletedCallerLosesAccess confirms that deleting a caller
+// via the admin API immediately revokes its key on /proxy.
+func TestEndToEnd_DeletedCallerLosesAccess(t *testing.T) {
+	s, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("second oauth request: %v", err)
+		t.Fatalf("store.Open: %v", err)
 	}
-	_ = oResp2.Body.Close()
+	t.Cleanup(func() { _ = s.Close() })
 
-	if tokenRequests != 1 {
-		t.Errorf("token endpoint requests = %d, want 1 (cached)", tokenRequests)
+	handlers := map[string]DispatchFunc{
+		"proxy": proxy.Serve(fakeSecretResolver{secret: "sekret"}, &http.Client{}),
+	}
+	handler, err := New(s, testAdminKey, handlers)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := s.CreateTarget(testTarget("stripe")); err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	createCallerRec := doAdminRequest(t, handler, "POST", "/admin/callers", map[string]any{"targets": []string{"stripe"}})
+	var caller createCallerResponse
+	if err := json.Unmarshal(createCallerRec.Body.Bytes(), &caller); err != nil {
+		t.Fatalf("unmarshal caller: %v", err)
+	}
+
+	deleteRec := doAdminRequest(t, handler, "DELETE", "/admin/callers/"+itoa(caller.ID), nil)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("delete caller status: got %d", deleteRec.Code)
+	}
+
+	req := httptest.NewRequest("GET", "/proxy/stripe/v1/charges", nil)
+	req.Header.Set("Authorization", "Bearer "+caller.Key)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }

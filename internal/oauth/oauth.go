@@ -18,7 +18,7 @@ import (
 // SecretResolver resolves the raw Infisical secret backing a target. It's
 // the same shape internal/secrets.Client already implements.
 type SecretResolver interface {
-	GetSecret(secretPath, secretName string) (string, error)
+	GetSecret(workspaceID, environment, secretPath, secretName string) (string, error)
 }
 
 type cacheEntry struct {
@@ -59,11 +59,11 @@ type tokenResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-// GetSecret resolves secretPath/secretName to a client_credentials blob,
-// exchanges it for an access token (serving a cached one while it's within
-// its TTL), and returns the token as the value proxy.Serve should inject.
-func (c *Client) GetSecret(secretPath, secretName string) (string, error) {
-	cacheKey := secretPath + ":" + secretName
+// GetSecret exchanges the OAuth2 client_credentials stored at
+// workspaceID/environment/secretPath/secretName for an access token,
+// caching it until shortly before it expires.
+func (c *Client) GetSecret(workspaceID, environment, secretPath, secretName string) (string, error) {
+	cacheKey := workspaceID + ":" + environment + ":" + secretPath + ":" + secretName
 
 	c.mu.Lock()
 	if entry, ok := c.cache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
@@ -72,7 +72,7 @@ func (c *Client) GetSecret(secretPath, secretName string) (string, error) {
 	}
 	c.mu.Unlock()
 
-	raw, err := c.secrets.GetSecret(secretPath, secretName)
+	raw, err := c.secrets.GetSecret(workspaceID, environment, secretPath, secretName)
 	if err != nil {
 		return "", fmt.Errorf("resolving client credentials: %w", err)
 	}
