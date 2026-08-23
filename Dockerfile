@@ -10,5 +10,6 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /out/broker /broker
 COPY --from=builder --chown=nonroot:nonroot /data /data
 WORKDIR /data
+VOLUME ["/data"]
 EXPOSE 8080
 ENTRYPOINT ["/broker"]
