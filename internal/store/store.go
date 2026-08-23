@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -55,16 +56,19 @@ type Store struct {
 // the ":memory:"-per-connection gotcha; move to Postgres if write
 // throughput ever matters.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := path + "?_pragma=foreign_keys(1)"
+	if strings.Contains(path, "?") {
+		dsn = path + "&_pragma=foreign_keys(1)"
+	}
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		return nil, fmt.Errorf("enabling foreign keys: %w", err)
-	}
 	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("applying schema: %w", err)
 	}
 	return &Store{db: db}, nil
