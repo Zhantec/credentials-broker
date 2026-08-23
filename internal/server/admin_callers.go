@@ -3,33 +3,52 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/Zhantec/credentials-broker/internal/store"
 )
 
+// maxAdminBodyBytes caps admin JSON request bodies well above any
+// legitimate payload, so a malicious/misbehaving caller can't force
+// the broker to buffer an unbounded body into memory.
+const maxAdminBodyBytes = 1 << 20 // 1 MiB
+
 type callerRequest struct {
 	Targets []string `json:"targets"`
 }
 
 type callerResponse struct {
-	ID      int64    `json:"id"`
-	Targets []string `json:"targets"`
+	ID        int64    `json:"id"`
+	Targets   []string `json:"targets"`
+	AllAccess bool     `json:"all_access"`
 }
 
 type createCallerResponse struct {
-	ID      int64    `json:"id"`
-	Key     string   `json:"key"`
-	Targets []string `json:"targets"`
+	ID        int64    `json:"id"`
+	Key       string   `json:"key"`
+	Targets   []string `json:"targets"`
+	AllAccess bool     `json:"all_access"`
 }
 
 func createCallerHandler(s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req callerRequest
 		if r.ContentLength != 0 {
+			r.Body = http.MaxBytesReader(w, r.Body, maxAdminBodyBytes)
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+		}
+
+		for _, name := range req.Targets {
+			if _, ok, err := s.FindTarget(name); err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			} else if !ok {
+				http.Error(w, "unknown target: "+name, http.StatusBadRequest)
 				return
 			}
 		}
@@ -44,10 +63,12 @@ func createCallerHandler(s *store.Store) http.HandlerFunc {
 		if targets == nil {
 			targets = []string{}
 		}
+		allAccess := len(targets) == 0
+		log.Printf("admin action=create_caller id=%d targets=%v all_access=%v", id, targets, allAccess)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(createCallerResponse{ID: id, Key: key, Targets: targets})
+		_ = json.NewEncoder(w).Encode(createCallerResponse{ID: id, Key: key, Targets: targets, AllAccess: allAccess})
 	}
 }
 
@@ -67,7 +88,7 @@ func listCallersHandler(s *store.Store) http.HandlerFunc {
 			if targets == nil {
 				targets = []string{}
 			}
-			resp.Callers[i] = callerResponse{ID: c.ID, Targets: targets}
+			resp.Callers[i] = callerResponse{ID: c.ID, Targets: targets, AllAccess: c.AllAccess}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -91,6 +112,7 @@ func deleteCallerHandler(s *store.Store) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		log.Printf("admin action=delete_caller id=%d", id)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

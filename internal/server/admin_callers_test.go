@@ -47,9 +47,24 @@ func TestCreateCaller_Scoped(t *testing.T) {
 	}
 }
 
+func TestCreateCaller_UnknownTarget(t *testing.T) {
+	_, handler := newTestServer(t)
+
+	rec := doAdminRequest(t, handler, "POST", "/admin/callers", map[string]any{"targets": []string{"does-not-exist"}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
 func TestListCallers(t *testing.T) {
 	s, handler := newTestServer(t)
 	if _, _, err := s.CreateCaller(nil); err != nil {
+		t.Fatalf("CreateCaller: %v", err)
+	}
+	if err := s.CreateTarget(testTarget("stripe")); err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	if _, _, err := s.CreateCaller([]string{"stripe"}); err != nil {
 		t.Fatalf("CreateCaller: %v", err)
 	}
 
@@ -64,8 +79,14 @@ func TestListCallers(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(resp.Callers) != 1 {
+	if len(resp.Callers) != 2 {
 		t.Fatalf("got %+v", resp.Callers)
+	}
+	if !resp.Callers[0].AllAccess {
+		t.Fatalf("caller 0 should be all-access: %+v", resp.Callers[0])
+	}
+	if resp.Callers[1].AllAccess {
+		t.Fatalf("caller 1 is scoped, should not be all-access: %+v", resp.Callers[1])
 	}
 	if raw := rec.Body.String(); strings.Contains(raw, `"key"`) {
 		t.Fatalf("list response must never contain a raw key: %s", raw)

@@ -86,6 +86,20 @@ func TestCreateTarget_RejectsEmptyInjectHeader(t *testing.T) {
 	}
 }
 
+func TestCreateTarget_RejectsInvalidBaseURL(t *testing.T) {
+	_, handler := newTestServer(t)
+
+	for _, baseURL := range []string{"not-a-url", "ftp://api.stripe.com", "https://", "/relative/path"} {
+		rec := doAdminRequest(t, handler, "POST", "/admin/targets", map[string]any{
+			"name": "stripe", "mode": "proxy", "base_url": baseURL,
+			"infisical_workspace_id": "ws-1", "infisical_environment": "prod", "infisical_secret": "/x",
+		})
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("base_url=%q: status: got %d, want %d", baseURL, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
 func TestCreateTarget_Duplicate(t *testing.T) {
 	s, handler := newTestServer(t)
 	if err := s.CreateTarget(store.Target{Name: "stripe", Mode: "proxy", BaseURL: "https://example.com", InfisicalWorkspaceID: "ws-1", InfisicalEnvironment: "prod", InfisicalSecret: "/x", InjectHeader: "Authorization", InjectPrefix: "Bearer "}); err != nil {

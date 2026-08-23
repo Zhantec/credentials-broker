@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 
@@ -42,6 +43,7 @@ func toTargetResponse(t store.Target) targetResponse {
 func createTargetHandler(s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req targetRequest
+		r.Body = http.MaxBytesReader(w, r.Body, maxAdminBodyBytes)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
@@ -59,8 +61,8 @@ func createTargetHandler(s *store.Store) http.HandlerFunc {
 			http.Error(w, "base_url is required", http.StatusBadRequest)
 			return
 		}
-		if _, err := url.Parse(req.BaseURL); err != nil {
-			http.Error(w, "base_url must be a valid URL", http.StatusBadRequest)
+		if u, err := url.Parse(req.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			http.Error(w, "base_url must be an absolute http(s) URL", http.StatusBadRequest)
 			return
 		}
 		if req.InfisicalWorkspaceID == "" {
@@ -104,6 +106,7 @@ func createTargetHandler(s *store.Store) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		log.Printf("admin action=create_target name=%s mode=%s", target.Name, target.Mode)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -142,6 +145,7 @@ func deleteTargetHandler(s *store.Store) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		log.Printf("admin action=delete_target name=%s", name)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
