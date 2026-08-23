@@ -3,7 +3,7 @@ package store
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 )
@@ -96,7 +96,7 @@ func (s *Store) ListCallers() ([]Caller, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	var callers []Caller
 	for _, r := range rowsOut {
@@ -145,36 +145,23 @@ func (s *Store) DeleteCaller(id int64) error {
 }
 
 // FindCallerByKey looks up the caller whose key hashes to rawKey.
+//
+// ponytail: key_hash is a SHA-256 digest looked up via its UNIQUE index
+// (WHERE key_hash = ?) rather than a constant-time scan of every row —
+// the hash itself is already the thing defeating timing/enumeration
+// attacks on the raw key, so an indexed equality lookup buys attackers
+// nothing a full scan would have denied them.
 func (s *Store) FindCallerByKey(rawKey string) (*Caller, bool, error) {
 	want := hashRawKey(rawKey)
 
-	rows, err := s.db.Query(`SELECT id, key_hash, all_access FROM callers`)
-	if err != nil {
-		return nil, false, fmt.Errorf("querying callers: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
 	var id int64
 	var allAccess bool
-	found := false
-	for rows.Next() {
-		var candidateID int64
-		var candidateHash string
-		var candidateAllAccess bool
-		if err := rows.Scan(&candidateID, &candidateHash, &candidateAllAccess); err != nil {
-			return nil, false, fmt.Errorf("scanning caller: %w", err)
-		}
-		if subtle.ConstantTimeCompare([]byte(candidateHash), []byte(want)) == 1 {
-			id, allAccess, found = candidateID, candidateAllAccess, true
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
-	rows.Close()
-	if !found {
+	err := s.db.QueryRow(`SELECT id, all_access FROM callers WHERE key_hash = ?`, want).Scan(&id, &allAccess)
+	if err == sql.ErrNoRows {
 		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("querying caller: %w", err)
 	}
 
 	targets, err := s.targetsForCaller(id)

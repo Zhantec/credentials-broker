@@ -31,6 +31,39 @@ func TestCreateAndFindCallerByKey(t *testing.T) {
 	}
 }
 
+func TestDeleteTarget_CascadesCallerScope(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateTarget(Target{Name: "stripe", Mode: "proxy", BaseURL: "https://example.com", InfisicalWorkspaceID: "ws-1", InfisicalEnvironment: "prod", InfisicalSecret: "/x", InjectHeader: "Authorization", InjectPrefix: "Bearer "}); err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	_, rawKey, err := s.CreateCaller([]string{"stripe"})
+	if err != nil {
+		t.Fatalf("CreateCaller: %v", err)
+	}
+
+	if err := s.DeleteTarget("stripe"); err != nil {
+		t.Fatalf("DeleteTarget: %v", err)
+	}
+
+	// Deleting the target must cascade-delete its caller_targets row (this
+	// only happens if PRAGMA foreign_keys=ON actually took effect on this
+	// connection) — the caller's Targets should go empty, not error out
+	// with a dangling reference, and AllAccess must stay false regardless.
+	caller, ok, err := s.FindCallerByKey(rawKey)
+	if err != nil {
+		t.Fatalf("FindCallerByKey: %v", err)
+	}
+	if !ok {
+		t.Fatal("FindCallerByKey: expected found")
+	}
+	if len(caller.Targets) != 0 {
+		t.Fatalf("FindCallerByKey: got targets %+v, want empty after cascade delete", caller.Targets)
+	}
+	if caller.AllAccess {
+		t.Fatal("FindCallerByKey: scoped caller must not become all-access when its scope is cascade-deleted")
+	}
+}
+
 func TestCreateCaller_EmptyTargetsIsAllAccess(t *testing.T) {
 	s := newTestStore(t)
 	_, rawKey, err := s.CreateCaller(nil)
