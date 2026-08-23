@@ -51,12 +51,12 @@ func TestCreateTarget(t *testing.T) {
 	_, handler := newTestServer(t)
 
 	rec := doAdminRequest(t, handler, "POST", "/admin/targets", map[string]any{
-		"name":                    "stripe",
-		"mode":                    "proxy",
-		"base_url":                "https://api.stripe.com",
-		"infisical_workspace_id":  "ws-1",
-		"infisical_environment":   "prod",
-		"infisical_secret":        "/prod/stripe/api_key",
+		"name":                   "stripe",
+		"mode":                   "proxy",
+		"base_url":               "https://api.stripe.com",
+		"infisical_workspace_id": "ws-1",
+		"infisical_environment":  "prod",
+		"infisical_secret":       "/prod/stripe/api_key",
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status: got %d, want %d, body=%s", rec.Code, http.StatusCreated, rec.Body.String())
