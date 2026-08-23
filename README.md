@@ -13,16 +13,20 @@ See [`docs/spec.md`](docs/spec.md) for the full spec.
 
 ## Configuration
 
-Targets and caller keys live in a YAML file — see
-[`config.example.yaml`](config.example.yaml).
+Targets and caller keys live in a SQLite database, managed at runtime
+through the [admin API](#admin-api) below — there's no file to edit or
+mount.
 
 | Environment variable | Required | Default |
 | --- | --- | --- |
-| `CONFIG_PATH` | no | `/etc/credentials-broker/config.yaml` |
+| `DB_PATH` | no | `credentials-broker.db` |
+| `ADMIN_API_KEY` | yes | — |
 | `PORT` | no | `8080` |
 | `INFISICAL_BASE_URL` | yes | — |
 | `INFISICAL_CLIENT_ID` | yes | — |
 | `INFISICAL_CLIENT_SECRET` | yes | — |
+
+The broker fails to start if `ADMIN_API_KEY` is unset.
 
 ## Routes
 
@@ -37,26 +41,65 @@ Every request carries `Authorization: Bearer <caller-api-key>`.
 Unknown key → `401`, key not permitted for the target → `403`, unknown target
 (or one whose mode has no handler) → `404`.
 
+## Admin API
+
+All `/admin/*` routes require `Authorization: Bearer <ADMIN_API_KEY>`.
+
+- `POST /admin/targets` — create a target.
+- `GET /admin/targets` — list targets.
+- `DELETE /admin/targets/{name}` — delete a target.
+- `POST /admin/callers` — create a caller; the response's `key` field is
+  the caller's bearer token for `/proxy/*` and is generated here and
+  never shown again.
+- `GET /admin/callers` — list callers (without their keys).
+- `DELETE /admin/callers/{id}` — delete a caller.
+
+There is no update or get-by-id endpoint.
+
+```bash
+curl -X POST http://localhost:8080/admin/targets \
+  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "stripe",
+    "mode": "proxy",
+    "base_url": "https://api.stripe.com",
+    "infisical_workspace_id": "ws-123",
+    "infisical_environment": "prod",
+    "infisical_secret": "/prod/stripe/api_key"
+  }'
+# inject_header/inject_prefix are optional, defaulting to
+# "Authorization"/"Bearer ".
+
+curl -X POST http://localhost:8080/admin/callers \
+  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"targets": ["stripe"]}'
+# targets is optional; omitted/empty means the caller may use every
+# target currently registered on this broker (dynamic all-access).
+```
+
 ## Development
 
 ```sh
-make run     # go run ./cmd/broker against config.example.yaml
+make run     # go run ./cmd/broker, needs DB_PATH/ADMIN_API_KEY/INFISICAL_* set
 make test    # go test ./...
 make lint    # golangci-lint run
 make format  # gofmt + goimports
 make build   # build a local ./bin/broker binary
 make docker-build  # docker build -t credentials-broker:dev .
-make docker-run    # run the built image, config.example.yaml mounted in
+make docker-run    # run the built image, DB stored in ./data
 ```
 
-`make run` still needs `INFISICAL_BASE_URL`, `INFISICAL_CLIENT_ID`, and
-`INFISICAL_CLIENT_SECRET` set in the environment.
+`make run` needs `ADMIN_API_KEY`, `INFISICAL_BASE_URL`, `INFISICAL_CLIENT_ID`,
+and `INFISICAL_CLIENT_SECRET` set in the environment.
 
 ## Running
 
 ```sh
 make docker-build
-INFISICAL_BASE_URL=https://app.infisical.com \
+ADMIN_API_KEY=... \
+  INFISICAL_BASE_URL=https://app.infisical.com \
   INFISICAL_CLIENT_ID=... \
   INFISICAL_CLIENT_SECRET=... \
   make docker-run

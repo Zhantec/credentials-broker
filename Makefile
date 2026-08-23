@@ -6,7 +6,7 @@ build:
 	go build -o bin/broker ./cmd/broker
 
 run:
-	CONFIG_PATH=config.example.yaml go run ./cmd/broker
+	go run ./cmd/broker
 
 test:
 	go test ./...
@@ -30,7 +30,9 @@ docker-build:
 
 docker-run:
 	docker run --rm -p 8080:8080 \
-		-v "$(PWD)/config.example.yaml:/etc/credentials-broker/config.yaml:ro" \
+		-v "$(PWD)/data:/data" \
+		-e DB_PATH=/data/credentials-broker.db \
+		-e ADMIN_API_KEY=$(ADMIN_API_KEY) \
 		-e INFISICAL_BASE_URL=$(INFISICAL_BASE_URL) \
 		-e INFISICAL_CLIENT_ID=$(INFISICAL_CLIENT_ID) \
 		-e INFISICAL_CLIENT_SECRET=$(INFISICAL_CLIENT_SECRET) \
