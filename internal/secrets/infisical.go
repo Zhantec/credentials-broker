@@ -19,8 +19,6 @@ type Client struct {
 	baseURL      string
 	clientID     string
 	clientSecret string
-	workspaceID  string
-	environment  string
 	httpClient   *http.Client
 	mu           sync.RWMutex
 	secretCache  map[string]cacheEntry
@@ -32,7 +30,7 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
-func NewClient(baseURL, clientID, clientSecret, workspaceID, environment string) *Client {
+func NewClient(baseURL, clientID, clientSecret string) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
@@ -40,17 +38,15 @@ func NewClient(baseURL, clientID, clientSecret, workspaceID, environment string)
 		baseURL:      baseURL,
 		clientID:     clientID,
 		clientSecret: clientSecret,
-		workspaceID:  workspaceID,
-		environment:  environment,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
 		secretCache:  make(map[string]cacheEntry),
 	}
 }
 
-// GetSecret fetches secretName at secretPath, serving a cached value while
-// it's within the TTL.
-func (c *Client) GetSecret(secretPath, secretName string) (string, error) {
-	cacheKey := secretPath + ":" + secretName
+// GetSecret fetches secretName at secretPath within workspaceID's
+// environment, serving a cached value while it's within the TTL.
+func (c *Client) GetSecret(workspaceID, environment, secretPath, secretName string) (string, error) {
+	cacheKey := workspaceID + ":" + environment + ":" + secretPath + ":" + secretName
 
 	// Check cache
 	c.mu.RLock()
@@ -68,7 +64,7 @@ func (c *Client) GetSecret(secretPath, secretName string) (string, error) {
 
 	// Fetch secret from API
 	url := fmt.Sprintf("%s/api/v3/secrets/raw/%s?secretPath=%s&environment=%s&workspaceId=%s",
-		c.baseURL, secretName, secretPath, c.environment, c.workspaceID)
+		c.baseURL, secretName, secretPath, environment, workspaceID)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

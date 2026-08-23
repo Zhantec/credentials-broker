@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zhantec/credentials-broker/internal/config"
+	"github.com/Zhantec/credentials-broker/internal/store"
 )
 
 type fakeResolver struct {
@@ -17,7 +17,7 @@ type fakeResolver struct {
 	err   error
 }
 
-func (f fakeResolver) GetSecret(secretPath, secretName string) (string, error) {
+func (f fakeResolver) GetSecret(workspaceID, environment, secretPath, secretName string) (string, error) {
 	return f.value, f.err
 }
 
@@ -31,7 +31,7 @@ func TestServe_InjectsHeaderAndForwards(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	target := &config.Target{
+	target := &store.Target{
 		BaseURL:         upstream.URL,
 		InjectHeader:    "Authorization",
 		InjectPrefix:    "Bearer ",
@@ -61,7 +61,7 @@ func TestServe_InjectsHeaderAndForwards(t *testing.T) {
 }
 
 func TestServe_SecretResolverError(t *testing.T) {
-	target := &config.Target{BaseURL: "http://unused", InfisicalSecret: "/prod/x/y"}
+	target := &store.Target{BaseURL: "http://unused", InfisicalSecret: "/prod/x/y"}
 	handler := Serve(fakeResolver{err: errors.New("boom")}, http.DefaultClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/x/anything", nil)
@@ -76,7 +76,7 @@ func TestServe_SecretResolverError(t *testing.T) {
 }
 
 func TestServe_InvalidBaseURL(t *testing.T) {
-	target := &config.Target{BaseURL: "http://foo.com/%zz", InfisicalSecret: "/prod/x/y"}
+	target := &store.Target{BaseURL: "http://foo.com/%zz", InfisicalSecret: "/prod/x/y"}
 	handler := Serve(fakeResolver{value: "s"}, http.DefaultClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/x/anything", nil)
@@ -97,7 +97,7 @@ func TestServe_PreservesTrailingSlash(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	target := &config.Target{BaseURL: upstream.URL, InjectHeader: "Authorization", InfisicalSecret: "/prod/x/y"}
+	target := &store.Target{BaseURL: upstream.URL, InjectHeader: "Authorization", InfisicalSecret: "/prod/x/y"}
 	handler := Serve(fakeResolver{value: "s"}, upstream.Client())
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/x/team-a/", nil)
@@ -117,7 +117,7 @@ func TestServe_RespectsClientTimeout(t *testing.T) {
 
 	client := upstream.Client()
 	client.Timeout = time.Second
-	target := &config.Target{BaseURL: upstream.URL, InjectHeader: "Authorization", InfisicalSecret: "/prod/x/y"}
+	target := &store.Target{BaseURL: upstream.URL, InjectHeader: "Authorization", InfisicalSecret: "/prod/x/y"}
 	handler := Serve(fakeResolver{value: "s"}, client)
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/x/anything", nil)
@@ -136,7 +136,7 @@ func TestServe_UpstreamUnreachable(t *testing.T) {
 	deadURL := upstream.URL
 	upstream.Close() // closed before use -> connection refused
 
-	target := &config.Target{BaseURL: deadURL, InfisicalSecret: "/prod/x/y"}
+	target := &store.Target{BaseURL: deadURL, InfisicalSecret: "/prod/x/y"}
 	handler := Serve(fakeResolver{value: "s"}, http.DefaultClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/x/anything", nil)
@@ -159,7 +159,7 @@ func TestServe_CallerAuthHeaderNotLeakedToUpstream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	target := &config.Target{
+	target := &store.Target{
 		BaseURL:         upstream.URL,
 		InjectHeader:    "X-Api-Key",
 		InjectPrefix:    "Bearer ",
@@ -192,7 +192,7 @@ func TestServe_ForwardsQueryString(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	target := &config.Target{BaseURL: upstream.URL, InjectHeader: "Authorization", InfisicalSecret: "/prod/stripe/api_key"}
+	target := &store.Target{BaseURL: upstream.URL, InjectHeader: "Authorization", InfisicalSecret: "/prod/stripe/api_key"}
 	handler := Serve(fakeResolver{value: "real-secret"}, upstream.Client())
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/stripe/v1/charges?limit=10", nil)
@@ -211,7 +211,7 @@ func TestServe_PathTraversalCannotEscapeBasePath(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	target := &config.Target{BaseURL: upstream.URL + "/team-a", InjectHeader: "Authorization", InfisicalSecret: "/prod/x/y"}
+	target := &store.Target{BaseURL: upstream.URL + "/team-a", InjectHeader: "Authorization", InfisicalSecret: "/prod/x/y"}
 	handler := Serve(fakeResolver{value: "s"}, upstream.Client())
 
 	// ServeMux hands "%2e%2e" to the handler already decoded as "..".

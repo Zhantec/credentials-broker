@@ -12,7 +12,7 @@ type fakeResolver struct {
 	err   error
 }
 
-func (f fakeResolver) GetSecret(secretPath, secretName string) (string, error) {
+func (f fakeResolver) GetSecret(workspaceID, environment, secretPath, secretName string) (string, error) {
 	return f.value, f.err
 }
 
@@ -34,7 +34,7 @@ func TestGetSecret_FetchesCachesAndInjectsToken(t *testing.T) {
 	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`
 	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
 
-	got, err := c.GetSecret("/prod/gh", "oauth_client")
+	got, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client")
 	if err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestGetSecret_FetchesCachesAndInjectsToken(t *testing.T) {
 	}
 
 	// Second call within TTL should be served from cache.
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err != nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err != nil {
 		t.Fatalf("GetSecret (cached): %v", err)
 	}
 	if requests != 1 {
@@ -65,10 +65,10 @@ func TestGetSecret_RefetchesAfterExpiry(t *testing.T) {
 	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`
 	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
 
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err != nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err != nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err != nil {
 		t.Fatalf("GetSecret (refetch): %v", err)
 	}
 	if requests != 2 {
@@ -78,14 +78,14 @@ func TestGetSecret_RefetchesAfterExpiry(t *testing.T) {
 
 func TestGetSecret_ResolverError(t *testing.T) {
 	c := NewClient(fakeResolver{err: errors.New("infisical down")}, http.DefaultClient)
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err == nil {
 		t.Error("expected error when secret resolution fails")
 	}
 }
 
 func TestGetSecret_MalformedCredentials(t *testing.T) {
 	c := NewClient(fakeResolver{value: "not json"}, http.DefaultClient)
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err == nil {
 		t.Error("expected error for malformed client credentials")
 	}
 }
@@ -102,7 +102,7 @@ func TestGetSecret_WithScope(t *testing.T) {
 	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `", "scope": "read:all"}`
 	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
 
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err != nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
 	if gotScope != "read:all" {
@@ -119,7 +119,7 @@ func TestGetSecret_MalformedTokenResponse(t *testing.T) {
 	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`
 	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
 
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err == nil {
 		t.Error("expected error when token response is malformed")
 	}
 }
@@ -134,7 +134,7 @@ func TestGetSecret_TokenResponseMissingAccessToken(t *testing.T) {
 	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`
 	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
 
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err == nil {
 		t.Error("expected error when token response is missing access_token")
 	}
 }
@@ -149,7 +149,7 @@ func TestGetSecret_TokenResponseNoExpiry(t *testing.T) {
 	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + tokenServer.URL + `"}`
 	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
 
-	got, err := c.GetSecret("/prod/gh", "oauth_client")
+	got, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client")
 	if err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestGetSecret_TokenResponseNoExpiry(t *testing.T) {
 
 func TestGetSecret_MissingTokenURL(t *testing.T) {
 	c := NewClient(fakeResolver{value: `{"client_id": "id", "client_secret": "secret"}`}, http.DefaultClient)
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err == nil {
 		t.Error("expected error when client credentials are missing token_url")
 	}
 }
@@ -173,7 +173,7 @@ func TestGetSecret_TokenEndpointUnreachable(t *testing.T) {
 	creds := `{"client_id": "id", "client_secret": "secret", "token_url": "` + deadURL + `"}`
 	c := NewClient(fakeResolver{value: creds}, http.DefaultClient)
 
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err == nil {
 		t.Error("expected error when token endpoint is unreachable")
 	}
 }
@@ -187,7 +187,7 @@ func TestGetSecret_TokenEndpointError(t *testing.T) {
 	creds := `{"client_id": "id", "client_secret": "bad", "token_url": "` + tokenServer.URL + `"}`
 	c := NewClient(fakeResolver{value: creds}, tokenServer.Client())
 
-	if _, err := c.GetSecret("/prod/gh", "oauth_client"); err == nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/gh", "oauth_client"); err == nil {
 		t.Error("expected error when token endpoint rejects credentials")
 	}
 }

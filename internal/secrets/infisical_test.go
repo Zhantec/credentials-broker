@@ -38,7 +38,7 @@ func fakeInfisical(t *testing.T) (*httptest.Server, *int, *int) {
 }
 
 func TestNewClient_DefaultBaseURL(t *testing.T) {
-	c := NewClient("", "id", "secret", "ws-1", "prod")
+	c := NewClient("", "id", "secret")
 	if c.baseURL != defaultBaseURL {
 		t.Errorf("baseURL = %q, want %q", c.baseURL, defaultBaseURL)
 	}
@@ -50,8 +50,8 @@ func TestGetSecret_AuthEndpointNon200(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "client-id", "client-secret", "ws-1", "prod")
-	if _, err := client.GetSecret("/prod/postgres", "dsn"); err == nil {
+	client := NewClient(server.URL, "client-id", "client-secret")
+	if _, err := client.GetSecret("ws-1", "prod", "/prod/postgres", "dsn"); err == nil {
 		t.Error("expected error when auth endpoint rejects credentials")
 	}
 }
@@ -62,8 +62,8 @@ func TestGetSecret_MalformedAuthResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "client-id", "client-secret", "ws-1", "prod")
-	if _, err := client.GetSecret("/prod/postgres", "dsn"); err == nil {
+	client := NewClient(server.URL, "client-id", "client-secret")
+	if _, err := client.GetSecret("ws-1", "prod", "/prod/postgres", "dsn"); err == nil {
 		t.Error("expected error when auth response is malformed")
 	}
 }
@@ -79,8 +79,8 @@ func TestGetSecret_SecretEndpointNon200(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	client := NewClient(server.URL, "client-id", "client-secret", "ws-1", "prod")
-	if _, err := client.GetSecret("/prod/postgres", "dsn"); err == nil {
+	client := NewClient(server.URL, "client-id", "client-secret")
+	if _, err := client.GetSecret("ws-1", "prod", "/prod/postgres", "dsn"); err == nil {
 		t.Error("expected error when secret endpoint returns non-200")
 	}
 }
@@ -96,8 +96,8 @@ func TestGetSecret_MalformedSecretResponse(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	client := NewClient(server.URL, "client-id", "client-secret", "ws-1", "prod")
-	if _, err := client.GetSecret("/prod/postgres", "dsn"); err == nil {
+	client := NewClient(server.URL, "client-id", "client-secret")
+	if _, err := client.GetSecret("ws-1", "prod", "/prod/postgres", "dsn"); err == nil {
 		t.Error("expected error when secret response is malformed")
 	}
 }
@@ -107,8 +107,8 @@ func TestGetSecret_AuthEndpointUnreachable(t *testing.T) {
 	deadURL := server.URL
 	server.Close() // closed before use -> connection refused
 
-	client := NewClient(deadURL, "client-id", "client-secret", "ws-1", "prod")
-	if _, err := client.GetSecret("/prod/postgres", "dsn"); err == nil {
+	client := NewClient(deadURL, "client-id", "client-secret")
+	if _, err := client.GetSecret("ws-1", "prod", "/prod/postgres", "dsn"); err == nil {
 		t.Error("expected error when auth endpoint is unreachable")
 	}
 }
@@ -130,12 +130,10 @@ func TestGetSecret_SecretFetchUnreachable(t *testing.T) {
 		baseURL:      server.URL,
 		clientID:     "id",
 		clientSecret: "secret",
-		workspaceID:  "ws-1",
-		environment:  "prod",
 		httpClient:   &http.Client{Transport: erroringSecretTransport{base: http.DefaultTransport}},
 		secretCache:  make(map[string]cacheEntry),
 	}
-	if _, err := c.GetSecret("/prod/postgres", "dsn"); err == nil {
+	if _, err := c.GetSecret("ws-1", "prod", "/prod/postgres", "dsn"); err == nil {
 		t.Error("expected error when secret fetch is unreachable")
 	}
 }
@@ -156,11 +154,11 @@ func TestGetSecret_TokenCacheReusedAcrossDifferentSecrets(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	client := NewClient(server.URL, "client-id", "client-secret", "ws-1", "prod")
-	if _, err := client.GetSecret("/prod/postgres", "dsn"); err != nil {
+	client := NewClient(server.URL, "client-id", "client-secret")
+	if _, err := client.GetSecret("ws-1", "prod", "/prod/postgres", "dsn"); err != nil {
 		t.Fatalf("first GetSecret: %v", err)
 	}
-	if _, err := client.GetSecret("/prod/other", "other"); err != nil {
+	if _, err := client.GetSecret("ws-1", "prod", "/prod/other", "other"); err != nil {
 		t.Fatalf("second GetSecret: %v", err)
 	}
 	if loginCalls != 1 {
@@ -170,9 +168,9 @@ func TestGetSecret_TokenCacheReusedAcrossDifferentSecrets(t *testing.T) {
 
 func TestGetSecret_CachesValue(t *testing.T) {
 	server, loginCalls, secretCalls := fakeInfisical(t)
-	client := NewClient(server.URL, "client-id", "client-secret", "ws-1", "prod")
+	client := NewClient(server.URL, "client-id", "client-secret")
 
-	value, err := client.GetSecret("/prod/postgres", "dsn")
+	value, err := client.GetSecret("ws-1", "prod", "/prod/postgres", "dsn")
 	if err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
@@ -180,7 +178,7 @@ func TestGetSecret_CachesValue(t *testing.T) {
 		t.Fatalf("unexpected value: %q", value)
 	}
 
-	if _, err := client.GetSecret("/prod/postgres", "dsn"); err != nil {
+	if _, err := client.GetSecret("ws-1", "prod", "/prod/postgres", "dsn"); err != nil {
 		t.Fatalf("second GetSecret: %v", err)
 	}
 
