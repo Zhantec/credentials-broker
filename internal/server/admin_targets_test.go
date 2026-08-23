@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/Zhantec/credentials-broker/internal/store"
@@ -150,4 +151,16 @@ func TestAdminRoutes_RejectMissingAdminKey(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
+}
+
+func testTarget(name string) store.Target {
+	return store.Target{
+		Name: name, Mode: "proxy", BaseURL: "https://example.com",
+		InfisicalWorkspaceID: "ws-1", InfisicalEnvironment: "prod",
+		InfisicalSecret: "/x", InjectHeader: "Authorization", InjectPrefix: "Bearer ",
+	}
+}
+
+func itoa(id int64) string {
+	return strconv.FormatInt(id, 10)
 }

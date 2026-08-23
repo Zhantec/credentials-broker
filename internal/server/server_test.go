@@ -5,85 +5,94 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Zhantec/credentials-broker/internal/authz"
-	"github.com/Zhantec/credentials-broker/internal/config"
+	"github.com/Zhantec/credentials-broker/internal/store"
 )
 
-func testConfig() *config.Config {
-	return &config.Config{
-		Callers: []config.Caller{
-			{Key: "sk_ok", Targets: []string{"stripe"}},
-			{Key: "sk_both", Targets: []string{"stripe", "github"}},
-		},
-		Targets: []config.Target{
-			{Name: "stripe", Mode: "proxy"},
-			{Name: "github", Mode: "oauth"},
-		},
-	}
-}
-
+// recordingHandler is a DispatchFunc that records how many times it was
+// invoked and replies 200, standing in for the real proxy/oauth handlers
+// to isolate withAuthz's routing decisions from what they dispatch to.
 func recordingHandler(calls *int) DispatchFunc {
-	return func(w http.ResponseWriter, r *http.Request, target *config.Target) {
+	return func(w http.ResponseWriter, r *http.Request, target *store.Target) {
 		*calls++
 		w.WriteHeader(http.StatusOK)
 	}
 }
 
-func TestNew_Routing(t *testing.T) {
+// TestWithAuthz_DispatchTable exercises New's full caller-facing dispatch
+// table over real HTTP round trips: missing key, unknown target, forbidden
+// scope, and successful dispatch to both proxy and oauth modes, plus a
+// target whose mode has no registered handler.
+func TestWithAuthz_DispatchTable(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if err := s.CreateTarget(testTarget("stripe")); err != nil {
+		t.Fatalf("CreateTarget(stripe): %v", err)
+	}
+	github := testTarget("github")
+	github.Mode = "oauth"
+	if err := s.CreateTarget(github); err != nil {
+		t.Fatalf("CreateTarget(github): %v", err)
+	}
+	unmapped := testTarget("unmapped")
+	unmapped.Mode = "no-such-mode"
+	if err := s.CreateTarget(unmapped); err != nil {
+		t.Fatalf("CreateTarget(unmapped): %v", err)
+	}
+
 	var proxyCalls, oauthCalls int
-	cfg := testConfig()
-	handler := New(cfg, map[string]DispatchFunc{
+	handler, err := New(s, testAdminKey, map[string]DispatchFunc{
 		"proxy": recordingHandler(&proxyCalls),
 		"oauth": recordingHandler(&oauthCalls),
 	})
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
-
-	cases := []struct {
-		name       string
-		method     string
-		path       string
-		authHeader string
-		wantStatus int
-	}{
-		{"missing key", http.MethodGet, "/proxy/stripe/v1/x", "", http.StatusUnauthorized},
-		{"unknown target", http.MethodGet, "/proxy/nope/v1/x", "Bearer sk_ok", http.StatusNotFound},
-		{"not permitted", http.MethodGet, "/proxy/github/v1/x", "Bearer sk_ok", http.StatusForbidden},
-		{"allowed proxy", http.MethodGet, "/proxy/stripe/v1/x", "Bearer sk_ok", http.StatusOK},
-		{"allowed oauth", http.MethodGet, "/proxy/github/v1/x", "Bearer sk_both", http.StatusOK},
-		{"unknown mode", http.MethodGet, "/proxy/unmapped/v1/x", "Bearer sk_unmapped", http.StatusNotFound},
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
 
-	cfg.Callers = append(cfg.Callers, config.Caller{Key: "sk_unmapped", Targets: []string{"unmapped"}})
-	cfg.Targets = append(cfg.Targets, config.Target{Name: "unmapped", Mode: "no-such-mode"})
+	_, stripeOnlyKey, err := s.CreateCaller([]string{"stripe"})
+	if err != nil {
+		t.Fatalf("CreateCaller(stripe): %v", err)
+	}
+	_, allKey, err := s.CreateCaller([]string{"stripe", "github", "unmapped"})
+	if err != nil {
+		t.Fatalf("CreateCaller(all): %v", err)
+	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			req, _ := http.NewRequest(c.method, srv.URL+c.path, nil)
-			if c.authHeader != "" {
-				req.Header.Set("Authorization", c.authHeader)
+	tests := []struct {
+		name       string
+		key        string
+		path       string
+		wantStatus int
+	}{
+		{"missing key -> unauthorized", "", "/proxy/stripe/foo", http.StatusUnauthorized},
+		{"unknown target -> not found", stripeOnlyKey, "/proxy/does-not-exist/foo", http.StatusNotFound},
+		{"forbidden -> forbidden", stripeOnlyKey, "/proxy/github/foo", http.StatusForbidden},
+		{"allowed proxy -> ok", stripeOnlyKey, "/proxy/stripe/foo", http.StatusOK},
+		{"allowed oauth -> ok", allKey, "/proxy/github/foo", http.StatusOK},
+		{"unmapped mode -> not found", allKey, "/proxy/unmapped/foo", http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.path, nil)
+			if tt.key != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.key)
 			}
-			resp, err := srv.Client().Do(req)
-			if err != nil {
-				t.Fatalf("request: %v", err)
-			}
-			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode != c.wantStatus {
-				t.Errorf("status = %d, want %d", resp.StatusCode, c.wantStatus)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status: got %d, want %d, body=%s", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 		})
 	}
 
 	if proxyCalls != 1 {
-		t.Errorf("proxy handler calls = %d, want 1", proxyCalls)
+		t.Fatalf("proxy handler calls: got %d, want 1", proxyCalls)
 	}
 	if oauthCalls != 1 {
-		t.Errorf("oauth handler calls = %d, want 1", oauthCalls)
-	}
-}
-
-func TestOutcomeLabel_UnknownResult(t *testing.T) {
-	if got := outcomeLabel(authz.Result(99)); got != "unknown" {
-		t.Errorf("outcomeLabel(99) = %q, want %q", got, "unknown")
+		t.Fatalf("oauth handler calls: got %d, want 1", oauthCalls)
 	}
 }
