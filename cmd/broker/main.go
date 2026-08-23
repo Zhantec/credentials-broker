@@ -7,37 +7,47 @@ import (
 	"os"
 	"time"
 
-	"github.com/Zhantec/credentials-broker/internal/config"
 	"github.com/Zhantec/credentials-broker/internal/oauth"
 	"github.com/Zhantec/credentials-broker/internal/proxy"
 	"github.com/Zhantec/credentials-broker/internal/secrets"
 	"github.com/Zhantec/credentials-broker/internal/server"
+	"github.com/Zhantec/credentials-broker/internal/store"
 )
 
 func main() {
-	configPath := os.Getenv("CONFIG_PATH")
-	if configPath == "" {
-		configPath = "/etc/credentials-broker/config.yaml"
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "credentials-broker.db"
 	}
-	cfg, err := config.Load(configPath)
+
+	adminAPIKey := os.Getenv("ADMIN_API_KEY")
+	if adminAPIKey == "" {
+		log.Fatal("ADMIN_API_KEY must be set")
+	}
+
+	s, err := store.Open(dbPath)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		log.Fatalf("opening store: %v", err)
 	}
+	defer func() { _ = s.Close() }()
 
 	secretsClient := secrets.NewClient(
 		os.Getenv("INFISICAL_BASE_URL"),
 		os.Getenv("INFISICAL_CLIENT_ID"),
 		os.Getenv("INFISICAL_CLIENT_SECRET"),
-		cfg.Infisical.WorkspaceID,
-		cfg.Infisical.Environment,
 	)
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	oauthClient := oauth.NewClient(secretsClient, httpClient)
 
-	handler := server.New(cfg, map[string]server.DispatchFunc{
+	handlers := map[string]server.DispatchFunc{
 		"proxy": proxy.Serve(secretsClient, httpClient),
 		"oauth": proxy.Serve(oauthClient, httpClient),
-	})
+	}
+
+	handler, err := server.New(s, adminAPIKey, handlers)
+	if err != nil {
+		log.Fatalf("building server: %v", err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
