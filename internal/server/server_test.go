@@ -18,6 +18,21 @@ func recordingHandler(calls *int) DispatchFunc {
 	}
 }
 
+// TestNew_EmptyAdminAPIKeyFailsClosed confirms the broker refuses to
+// start with an admin API nobody can lock rather than serving admin
+// routes unauthenticated.
+func TestNew_EmptyAdminAPIKeyFailsClosed(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if _, err := New(s, "", map[string]DispatchFunc{}); err == nil {
+		t.Fatal("New with empty adminAPIKey: got nil error, want non-nil")
+	}
+}
+
 // TestWithAuthz_DispatchTable exercises New's full caller-facing dispatch
 // table over real HTTP round trips: missing key, unknown target, forbidden
 // scope, and successful dispatch to both proxy and oauth modes, plus a

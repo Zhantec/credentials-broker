@@ -111,6 +111,44 @@ func TestCheck_Forbidden(t *testing.T) {
 	}
 }
 
+// TestCheck_ScopedCallerStaysForbiddenAfterItsOnlyTargetIsDeleted is a
+// regression test for a privilege-escalation bug: caller_targets rows
+// cascade-delete when their target is deleted, so a caller scoped to
+// exactly one target used to end up with an empty Targets slice after
+// that target was removed — and authz.Check read "empty Targets" as
+// unrestricted all-access. AllAccess is now fixed at caller-creation
+// time, so a scoped caller must stay Forbidden for other targets even
+// after its only scoped target is deleted out from under it.
+func TestCheck_ScopedCallerStaysForbiddenAfterItsOnlyTargetIsDeleted(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateTarget(t, s, "alpha")
+	mustCreateTarget(t, s, "beta")
+	_, key, err := s.CreateCaller([]string{"alpha"})
+	if err != nil {
+		t.Fatalf("CreateCaller: %v", err)
+	}
+
+	result, err := Check(s, key, "beta")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if result != Forbidden {
+		t.Fatalf("Check(beta) before delete: got %v, want Forbidden", result)
+	}
+
+	if err := s.DeleteTarget("alpha"); err != nil {
+		t.Fatalf("DeleteTarget(alpha): %v", err)
+	}
+
+	result, err = Check(s, key, "beta")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if result != Forbidden {
+		t.Fatalf("Check(beta) after alpha deleted: got %v, want Forbidden (cascade-delete of the caller's only scope row must not widen it to all-access)", result)
+	}
+}
+
 func TestCheck_UnauthenticatedTakesPriorityOverTargetNotFound(t *testing.T) {
 	s := newTestStore(t)
 	result, err := Check(s, "sk_live_bogus", "missing")

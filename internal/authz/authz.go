@@ -37,7 +37,7 @@ func Check(s *store.Store, key, targetName string) (Result, error) {
 		return TargetNotFound, nil
 	}
 
-	if len(caller.Targets) == 0 {
+	if caller.AllAccess {
 		return Allowed, nil
 	}
 	for _, t := range caller.Targets {

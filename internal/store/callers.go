@@ -9,11 +9,17 @@ import (
 )
 
 // Caller is a broker-access identity. Targets lists the target names
-// this caller may use; an empty list means the caller may use every
-// target currently registered on this broker instance.
+// this caller may use. AllAccess is fixed at creation time based on
+// whether Targets was empty then — it is NOT re-derived from the
+// current Targets length, so it stays false forever for a caller that
+// was scoped to specific targets even if every one of those targets is
+// later deleted (which cascade-deletes its caller_targets rows). This
+// keeps the "empty because unscoped" and "empty because its scope got
+// deleted out from under it" cases from being conflated as all-access.
 type Caller struct {
-	ID      int64
-	Targets []string
+	ID        int64
+	Targets   []string
+	AllAccess bool
 }
 
 func hashRawKey(rawKey string) string {
@@ -45,7 +51,7 @@ func (s *Store) CreateCaller(targets []string) (id int64, rawKey string, err err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.Exec(`INSERT INTO callers (key_hash) VALUES (?)`, hashRawKey(rawKey))
+	res, err := tx.Exec(`INSERT INTO callers (key_hash, all_access) VALUES (?, ?)`, hashRawKey(rawKey), len(targets) == 0)
 	if err != nil {
 		return 0, "", fmt.Errorf("inserting caller: %w", err)
 	}
@@ -69,19 +75,23 @@ func (s *Store) CreateCaller(targets []string) (id int64, rawKey string, err err
 // ListCallers returns every registered caller (never their keys),
 // ordered by id.
 func (s *Store) ListCallers() ([]Caller, error) {
-	rows, err := s.db.Query(`SELECT id FROM callers ORDER BY id`)
+	rows, err := s.db.Query(`SELECT id, all_access FROM callers ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("querying callers: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []int64
+	type idAndAllAccess struct {
+		id        int64
+		allAccess bool
+	}
+	var rowsOut []idAndAllAccess
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var r idAndAllAccess
+		if err := rows.Scan(&r.id, &r.allAccess); err != nil {
 			return nil, fmt.Errorf("scanning caller: %w", err)
 		}
-		ids = append(ids, id)
+		rowsOut = append(rowsOut, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -89,12 +99,12 @@ func (s *Store) ListCallers() ([]Caller, error) {
 	rows.Close()
 
 	var callers []Caller
-	for _, id := range ids {
-		targets, err := s.targetsForCaller(id)
+	for _, r := range rowsOut {
+		targets, err := s.targetsForCaller(r.id)
 		if err != nil {
 			return nil, err
 		}
-		callers = append(callers, Caller{ID: id, Targets: targets})
+		callers = append(callers, Caller{ID: r.id, Targets: targets, AllAccess: r.allAccess})
 	}
 	return callers, nil
 }
@@ -138,22 +148,24 @@ func (s *Store) DeleteCaller(id int64) error {
 func (s *Store) FindCallerByKey(rawKey string) (*Caller, bool, error) {
 	want := hashRawKey(rawKey)
 
-	rows, err := s.db.Query(`SELECT id, key_hash FROM callers`)
+	rows, err := s.db.Query(`SELECT id, key_hash, all_access FROM callers`)
 	if err != nil {
 		return nil, false, fmt.Errorf("querying callers: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var id int64
+	var allAccess bool
 	found := false
 	for rows.Next() {
 		var candidateID int64
 		var candidateHash string
-		if err := rows.Scan(&candidateID, &candidateHash); err != nil {
+		var candidateAllAccess bool
+		if err := rows.Scan(&candidateID, &candidateHash, &candidateAllAccess); err != nil {
 			return nil, false, fmt.Errorf("scanning caller: %w", err)
 		}
 		if subtle.ConstantTimeCompare([]byte(candidateHash), []byte(want)) == 1 {
-			id, found = candidateID, true
+			id, allAccess, found = candidateID, candidateAllAccess, true
 			break
 		}
 	}
@@ -169,5 +181,5 @@ func (s *Store) FindCallerByKey(rawKey string) (*Caller, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	return &Caller{ID: id, Targets: targets}, true, nil
+	return &Caller{ID: id, Targets: targets, AllAccess: allAccess}, true, nil
 }
