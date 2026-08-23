@@ -28,6 +28,9 @@ func (t *Target) SecretPathAndName() (path, name string) {
 		return "/", t.InfisicalSecret
 	}
 	path = t.InfisicalSecret[:idx]
+	if path == "" {
+		path = "/"
+	}
 	return path, t.InfisicalSecret[idx+1:]
 }
 

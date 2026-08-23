@@ -122,7 +122,7 @@ func TestSecretPathAndName(t *testing.T) {
 	}{
 		{"/prod/stripe/api_key", "/prod/stripe", "api_key"},
 		{"api_key", "/", "api_key"},
-		{"/api_key", "", "api_key"},
+		{"/api_key", "/", "api_key"},
 	}
 	for _, tt := range tests {
 		target := Target{InfisicalSecret: tt.secret}
