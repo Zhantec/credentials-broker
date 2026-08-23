@@ -28,6 +28,8 @@ mount.
 
 The broker fails to start if `ADMIN_API_KEY` is unset.
 
+Breaking change from the YAML-config version: existing configuration is not migrated automatically. Re-register targets and callers through the admin API after upgrading.
+
 ## Routes
 
 Every request carries `Authorization: Bearer <caller-api-key>`.
