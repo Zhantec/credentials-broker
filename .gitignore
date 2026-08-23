@@ -10,6 +10,10 @@ config.yaml
 !.env.example
 !config.example.yaml
 
+# Local/docker-run SQLite database - contains real target/caller data, never commit
+*.db
+/data/
+
 # Worktrees
 .worktrees/
 
